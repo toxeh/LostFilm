@@ -334,8 +334,9 @@ fun LoginPanel(
     var captcha by remember { mutableStateOf("") }
     val captchaFocus = remember { FocusRequester() }
 
-    // Auto-focus captcha field
-    LaunchedEffect(Unit) {
+    // Clear captcha field and re-focus when new captcha image arrives
+    LaunchedEffect(captchaBitmap) {
+        captcha = ""
         kotlinx.coroutines.delay(300)
         try { captchaFocus.requestFocus() } catch (_: Exception) {}
     }
