@@ -89,48 +89,70 @@ fun MainScreen(repository: LostFilmRepository, saveProxy: (String, Int) -> Unit)
         }
     }
 
-    // Startup: v6 (SNI-split + DoH) → proxy fallback
+    // Startup: TLS record splitting race vs proxy (first to succeed wins)
     LaunchedEffect(Unit) {
         coroutineScope.launch {
-            // Step 1: Try v6 (SNI-splitting + DoH)
-            statusMessage = "Обход DPI (SNI-splitting)..."
-            val v6ok = withContext(Dispatchers.IO) {
+            statusMessage = "Подключение..."
+
+            val hasSavedProxy = ProxyConfig.proxyHost.isNotBlank()
+
+            // Channel to receive the first successful result
+            val channel = kotlinx.coroutines.channels.Channel<Pair<List<Episode>, okhttp3.OkHttpClient>>(1)
+
+            // Attempt 1: TLS record splitting + DoH (direct, no proxy)
+            val v6job = launch(Dispatchers.IO) {
                 try {
+                    Log.d(TAG, "v6: trying TLS record splitting...")
                     val client = NetworkClient.createV6Client()
-                    val resp = client.newCall(
-                        okhttp3.Request.Builder().url("https://www.lostfilm.tv/").head().build()
-                    ).execute()
-                    Log.d(TAG, "v6 direct: code=${resp.code}")
-                    resp.isSuccessful
+                    val result = repository.getRecentEpisodes(client)
+                    Log.d(TAG, "v6: loaded ${result.size} episodes")
+                    channel.trySend(result to client)
                 } catch (e: Exception) {
                     Log.d(TAG, "v6 failed: ${e.message}")
-                    false
                 }
             }
 
-            if (v6ok) {
-                statusMessage = "Прямое подключение через DPI bypass!"
-                loadData(NetworkClient.createV6Client())
-                return@launch
+            // Attempt 2: Proxy (saved or auto-discovered), starts in parallel
+            val proxyJob = launch(Dispatchers.IO) {
+                // If no saved proxy, wait a bit to give v6 a head start
+                if (!hasSavedProxy) {
+                    kotlinx.coroutines.delay(3000)
+                    // Auto-discover in background
+                    if (!ProxyConfig.autoDiscover()) {
+                        Log.d(TAG, "proxy: no working proxy found")
+                        return@launch
+                    }
+                    saveProxy(ProxyConfig.proxyHost, ProxyConfig.proxyPort)
+                }
+                try {
+                    Log.d(TAG, "proxy: trying ${ProxyConfig.proxyHost}:${ProxyConfig.proxyPort}...")
+                    val client = NetworkClient.createProxiedClient()
+                    val result = repository.getRecentEpisodes(client)
+                    Log.d(TAG, "proxy: loaded ${result.size} episodes")
+                    channel.trySend(result to client)
+                } catch (e: Exception) {
+                    Log.d(TAG, "proxy failed: ${e.message}")
+                }
             }
 
-            // Step 2: If proxy is saved, try it
-            if (ProxyConfig.proxyHost.isNotBlank()) {
-                statusMessage = "Подключение через прокси ${ProxyConfig.proxyHost}..."
-                loadData(NetworkClient.createProxiedClient())
-                return@launch
+            // Wait for the first winner (timeout 40s total)
+            val winner = withContext(Dispatchers.IO) {
+                kotlinx.coroutines.withTimeoutOrNull(40_000) {
+                    channel.receive()
+                }
             }
 
-            // Step 3: Auto-discover proxy
-            statusMessage = "Автопоиск прокси-серверов..."
-            val found = withContext(Dispatchers.IO) { ProxyConfig.autoDiscover() }
-            if (found) {
-                saveProxy(ProxyConfig.proxyHost, ProxyConfig.proxyPort)
-                statusMessage = "Прокси: ${ProxyConfig.proxyHost}:${ProxyConfig.proxyPort}"
-                loadData(NetworkClient.createProxiedClient())
+            v6job.cancel()
+            proxyJob.cancel()
+
+            if (winner != null) {
+                val (result, client) = winner
+                episodes = result
+                activeClient = client
+                isLoading = false
             } else {
                 isLoading = false
-                errorMessage = "Не удалось подключиться. Укажите прокси вручную."
+                errorMessage = "Не удалось подключиться. Попробуйте прокси."
                 showProxyDialog = true
             }
         }
