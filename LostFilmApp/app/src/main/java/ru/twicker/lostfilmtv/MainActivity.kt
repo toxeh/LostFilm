@@ -1,11 +1,13 @@
 package ru.twicker.lostfilmtv
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +33,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import ru.twicker.lostfilmtv.network.CiadpiRunner
 import ru.twicker.lostfilmtv.network.Episode
 import ru.twicker.lostfilmtv.network.LostFilmAuth
@@ -92,7 +96,7 @@ private sealed class Screen {
     data class Login(
         val error: String? = null,
         val busy: Boolean = false,
-        val captchaUrl: String = freshCaptchaUrl()  // always show captcha
+        val captchaBitmap: Bitmap? = null
     ) : Screen()
     data class Episodes(val list: List<Episode>) : Screen()
     data class Error(val message: String) : Screen()
@@ -122,11 +126,18 @@ fun MainScreen(repository: LostFilmRepository) {
     var savedEmail by remember { mutableStateOf("") }
     var savedPass  by remember { mutableStateOf("") }
 
+    // ── helper: fetch captcha bitmap ──────────────────────────────────────
+    suspend fun loadCaptcha(client: okhttp3.OkHttpClient): Bitmap? =
+        withContext(Dispatchers.IO) { LostFilmAuth.fetchCaptchaBitmap(client) }
+
     // ── doLogin helper ───────────────────────────────────────────────────────
     suspend fun doLogin(email: String, pass: String, captcha: String? = null) {
         savedEmail = email; savedPass = pass
-        screen = Screen.Login(busy = true, captchaUrl = (screen as? Screen.Login)?.captchaUrl ?: freshCaptchaUrl())
+        screen = Screen.Login(busy = true, captchaBitmap = (screen as? Screen.Login)?.captchaBitmap)
         val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
+
+        Log.d(TAG, "doLogin: captcha=${captcha != null}")
+
         val result = withContext(Dispatchers.IO) {
             LostFilmAuth.login(context, client, email, pass, captcha)
         }
@@ -140,10 +151,16 @@ fun MainScreen(repository: LostFilmRepository) {
                          else Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
             }
             is LostFilmAuth.LoginResult.NeedCaptcha -> {
-                screen = Screen.Login(captchaUrl = result.captchaImageUrl)
+                Log.d(TAG, "NeedCaptcha → fetching bitmap")
+                val bmp = loadCaptcha(client)
+                screen = Screen.Login(captchaBitmap = bmp)
             }
             is LostFilmAuth.LoginResult.Error -> {
-                screen = Screen.Login(error = result.message)
+                Log.d(TAG, "Login error: ${result.message}, fetching fresh captcha")
+                // Re-prime session + fetch new captcha
+                withContext(Dispatchers.IO) { LostFilmAuth.login(context, client, email, pass, null) }
+                val bmp = loadCaptcha(client)
+                screen = Screen.Login(error = result.message, captchaBitmap = bmp)
             }
         }
     }
@@ -154,13 +171,24 @@ fun MainScreen(repository: LostFilmRepository) {
         if (!ok) { screen = Screen.Error("ciadpi не запустился"); return@LaunchedEffect }
         val client = NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
 
-        val creds = LostFilmAuth.loadCredentials(context)
-        if (creds == null) { screen = Screen.Login(); return@LaunchedEffect }
+        // Establish PHPSESSID
+        withContext(Dispatchers.IO) { LostFilmAuth.initSession(client) }
 
+        val creds = LostFilmAuth.loadCredentials(context)
+        val email = creds?.first ?: ""
+        val pass = creds?.second ?: ""
+        savedEmail = email; savedPass = pass
+
+        if (email.isBlank()) {
+            val bmp = loadCaptcha(client)
+            screen = Screen.Login(captchaBitmap = bmp)
+            return@LaunchedEffect
+        }
+
+        // Try login without captcha
         statusMsg = "Авторизация..."
-        savedEmail = creds.first; savedPass = creds.second
         val loginRes = withContext(Dispatchers.IO) {
-            LostFilmAuth.login(context, client, creds.first, creds.second)
+            LostFilmAuth.login(context, client, email, pass, null)
         }
         when (loginRes) {
             is LostFilmAuth.LoginResult.Success -> {
@@ -171,10 +199,11 @@ fun MainScreen(repository: LostFilmRepository) {
                 screen = if (eps != null) Screen.Episodes(eps) else Screen.Error("Не удалось загрузить")
             }
             is LostFilmAuth.LoginResult.NeedCaptcha -> {
-                screen = Screen.Login(captchaUrl = loginRes.captchaImageUrl)
+                val bmp = loadCaptcha(client)
+                screen = Screen.Login(captchaBitmap = bmp)
             }
             is LostFilmAuth.LoginResult.Error -> {
-                screen = Screen.Login(error = "Сохранённый логин: ${loginRes.message}")
+                screen = Screen.Login(error = "${loginRes.message}")
             }
         }
     }
@@ -252,9 +281,13 @@ fun MainScreen(repository: LostFilmRepository) {
                     Text(statusMsg, color = LF_TextSecondary)
                 }
                 is Screen.Login -> LoginPanel(
-                    error = s.error, busy = s.busy, captchaUrl = s.captchaUrl,
-                    imageLoader = activeClient?.let { ImageLoader.Builder(context).okHttpClient(it).build() },
+                    error = s.error, busy = s.busy, captchaBitmap = s.captchaBitmap,
                     onLogin = { email, pass, captcha -> scope.launch { doLogin(email, pass, captcha) } },
+                    onRefreshCaptcha = { scope.launch {
+                        val client = activeClient ?: return@launch
+                        val bmp = loadCaptcha(client)
+                        screen = Screen.Login(captchaBitmap = bmp, error = (screen as? Screen.Login)?.error)
+                    }},
                     savedEmail = savedEmail, savedPass = savedPass
                 )
                 is Screen.Episodes -> {
@@ -288,15 +321,14 @@ fun MainScreen(repository: LostFilmRepository) {
 // ─── Login Panel ──────────────────────────────────────────────────────────────
 @Composable
 fun LoginPanel(
-    error: String?, busy: Boolean, captchaUrl: String,
-    imageLoader: ImageLoader?,
+    error: String?, busy: Boolean, captchaBitmap: Bitmap?,
     onLogin: (String, String, String?) -> Unit,
+    onRefreshCaptcha: () -> Unit,
     savedEmail: String, savedPass: String
 ) {
     var email   by remember { mutableStateOf(savedEmail.ifBlank { "user@example.com" }) }
     var pass    by remember { mutableStateOf(savedPass.ifBlank { "REDACTED" }) }
     var captcha by remember { mutableStateOf("") }
-    var currentCaptchaUrl by remember { mutableStateOf(captchaUrl) }
     val captchaFocus = remember { FocusRequester() }
 
     // Auto-focus captcha field
@@ -335,21 +367,26 @@ fun LoginPanel(
             }
             // Right column : captcha
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (imageLoader != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current).data(currentCaptchaUrl).crossfade(true).build(),
-                        imageLoader = imageLoader,
+                if (captchaBitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = captchaBitmap.asImageBitmap(),
                         contentDescription = "CAPTCHA",
-                        modifier = Modifier.fillMaxWidth().height(64.dp)
+                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                        contentScale = ContentScale.FillWidth
                     )
+                } else {
+                    Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = LF_Red, strokeWidth = 2.dp)
+                    }
                 }
                 OutlinedTextField(
                     value = captcha, onValueChange = { captcha = it },
                     label = { Text("Код с картинки") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth().focusRequester(captchaFocus),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     enabled = !busy
                 )
-                TextButton(onClick = { currentCaptchaUrl = freshCaptchaUrl(); captcha = "" },
+                TextButton(onClick = { onRefreshCaptcha(); captcha = "" },
                     modifier = Modifier.align(Alignment.End),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                 ) { Text("↻ Обновить", color = LF_RedLight, style = MaterialTheme.typography.labelSmall) }

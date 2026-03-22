@@ -110,19 +110,55 @@ object LostFilmAuth {
 
     sealed class LoginResult {
         object Success : LoginResult()
-        /** Server wants CAPTCHA — show captchaImageUrl to user, then re-call login with captcha= */
         data class NeedCaptcha(val captchaImageUrl: String) : LoginResult()
         data class Error(val message: String) : LoginResult()
     }
 
     /**
-     * Perform login. If captcha is non-null, include it in the form.
+     * GET /login/ to establish PHPSESSID cookie.
+     * Captcha image and login POST must share this session.
+     */
+    fun initSession(client: OkHttpClient) {
+        try {
+            val req = Request.Builder()
+                .url("https://www.lostfilm.tv/login/")
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val resp = client.newCall(req).execute()
+            resp.body?.close()
+            Log.d(TAG, "initSession: ${resp.code}, cookies=${client.cookieJar.loadForRequest("https://www.lostfilm.tv/".toHttpUrl()).map { "${it.name}=${it.value.take(10)}" }}")
+        } catch (e: Exception) {
+            Log.e(TAG, "initSession failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Fetch CAPTCHA image as Bitmap via OkHttp (same cookies as login).
      * Must be called on IO dispatcher.
-     *
-     * Flow:
-     *   1. POST with email+pass → may get {need_captcha:true, result:"ok"}
-     *   2. Return NeedCaptcha — UI shows /simple_captcha.php image + input
-     *   3. POST with email+pass+need_captcha=1+captcha=<text> → success or error
+     */
+    fun fetchCaptchaBitmap(client: OkHttpClient): android.graphics.Bitmap? {
+        return try {
+            val url = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+            val req = Request.Builder()
+                .url(url)
+                .header("Referer", "https://www.lostfilm.tv/login/")
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val resp = client.newCall(req).execute()
+            val bytes = resp.body?.bytes()
+            Log.d(TAG, "fetchCaptcha: ${resp.code}, ${bytes?.size ?: 0} bytes")
+            if (bytes != null && bytes.isNotEmpty()) {
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchCaptcha failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Perform login. Always sends need_captcha and captcha fields.
+     * Must be called on IO dispatcher.
      */
     fun login(
         context: Context,
@@ -138,10 +174,8 @@ object LostFilmAuth {
                 .add("mail", email)
                 .add("pass", password)
                 .add("rem", "1")
-            if (captcha != null) {
-                bodyBuilder.add("need_captcha", "1")
-                bodyBuilder.add("captcha", captcha)
-            }
+                .add("need_captcha", if (captcha != null) "1" else "")
+                .add("captcha", captcha ?: "")
 
             val request = Request.Builder()
                 .url("https://www.lostfilm.tv/ajaxik.users.php")
