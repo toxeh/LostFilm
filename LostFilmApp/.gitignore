@@ -1,0 +1,37 @@
+# Android
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.dex
+*.class
+*.ap_
+*.log
+
+# App build output
+app/build/
+
+# Gradle wrapper & distribution (downloaded locally)
+gradle-*/
+gradle-*-bin.zip
+.gradle/
+
+# Android SDK (downloaded locally)
+/android-sdk/
+
+# Decompiled resources (from original APK)
+/decompiled/
+
+# APK files
+*.apk
+
+# OS
+.DS_Store
+Thumbs.db

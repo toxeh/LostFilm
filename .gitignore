@@ -1,0 +1,5 @@
+# LostFilm
+
+*.apk
+decompiled/
+android-sdk/
