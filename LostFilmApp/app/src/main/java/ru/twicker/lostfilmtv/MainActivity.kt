@@ -22,6 +22,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.twicker.lostfilmtv.network.CiadpiRunner
 import ru.twicker.lostfilmtv.network.Episode
 import ru.twicker.lostfilmtv.network.LostFilmRepository
 import ru.twicker.lostfilmtv.network.NetworkClient
@@ -65,6 +66,7 @@ fun LostFilmAppTheme(content: @Composable () -> Unit) {
 
 @Composable
 fun MainScreen(repository: LostFilmRepository, saveProxy: (String, Int) -> Unit) {
+    val context = LocalContext.current
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var statusMessage by remember { mutableStateOf("Подключение...") }
@@ -89,74 +91,32 @@ fun MainScreen(repository: LostFilmRepository, saveProxy: (String, Int) -> Unit)
         }
     }
 
-    // Startup: TLS record splitting race vs proxy (first to succeed wins)
+    // Startup: embedded ciadpi SOCKS5 proxy (--tlsrec 1+s --auto=torst)
     LaunchedEffect(Unit) {
         coroutineScope.launch {
-            statusMessage = "Подключение..."
+            statusMessage = "Запуск ciadpi..."
+            val ok = withContext(Dispatchers.IO) { CiadpiRunner.start(context) }
 
-            val hasSavedProxy = ProxyConfig.proxyHost.isNotBlank()
-
-            // Channel to receive the first successful result
-            val channel = kotlinx.coroutines.channels.Channel<Pair<List<Episode>, okhttp3.OkHttpClient>>(1)
-
-            // Attempt 1: TLS record splitting + DoH (direct, no proxy)
-            val v6job = launch(Dispatchers.IO) {
-                try {
-                    Log.d(TAG, "v6: trying TLS record splitting...")
-                    val client = NetworkClient.createV6Client()
-                    val result = repository.getRecentEpisodes(client)
-                    Log.d(TAG, "v6: loaded ${result.size} episodes")
-                    channel.trySend(result to client)
-                } catch (e: Exception) {
-                    Log.d(TAG, "v6 failed: ${e.message}")
+            if (ok) {
+                statusMessage = "Обход DPI через ciadpi..."
+                val client = NetworkClient.createCiadpiClient()
+                val result = withContext(Dispatchers.IO) {
+                    try { repository.getRecentEpisodes(client).also { Log.d(TAG, "ciadpi: ${it.size} episodes") } }
+                    catch (e: Exception) { Log.d(TAG, "ciadpi failed: ${e.message}"); null }
                 }
+                if (result != null) {
+                    episodes = result; activeClient = client; isLoading = false
+                    return@launch
+                }
+                CiadpiRunner.stop()
             }
 
-            // Attempt 2: Proxy (saved or auto-discovered), starts in parallel
-            val proxyJob = launch(Dispatchers.IO) {
-                // If no saved proxy, wait a bit to give v6 a head start
-                if (!hasSavedProxy) {
-                    kotlinx.coroutines.delay(3000)
-                    // Auto-discover in background
-                    if (!ProxyConfig.autoDiscover()) {
-                        Log.d(TAG, "proxy: no working proxy found")
-                        return@launch
-                    }
-                    saveProxy(ProxyConfig.proxyHost, ProxyConfig.proxyPort)
-                }
-                try {
-                    Log.d(TAG, "proxy: trying ${ProxyConfig.proxyHost}:${ProxyConfig.proxyPort}...")
-                    val client = NetworkClient.createProxiedClient()
-                    val result = repository.getRecentEpisodes(client)
-                    Log.d(TAG, "proxy: loaded ${result.size} episodes")
-                    channel.trySend(result to client)
-                } catch (e: Exception) {
-                    Log.d(TAG, "proxy failed: ${e.message}")
-                }
-            }
-
-            // Wait for the first winner (timeout 40s total)
-            val winner = withContext(Dispatchers.IO) {
-                kotlinx.coroutines.withTimeoutOrNull(40_000) {
-                    channel.receive()
-                }
-            }
-
-            v6job.cancel()
-            proxyJob.cancel()
-
-            if (winner != null) {
-                val (result, client) = winner
-                episodes = result
-                activeClient = client
-                isLoading = false
-            } else {
-                isLoading = false
-                errorMessage = "Не удалось подключиться. Попробуйте прокси."
-                showProxyDialog = true
-            }
+            isLoading = false
+            errorMessage = "ciadpi не смог обойти блокировку. Перезапустите приложение."
         }
     }
+
+
 
     if (showProxyDialog) {
         AlertDialog(

@@ -61,7 +61,7 @@ class LostFilmRepository {
                     var link = linkEl.attr("href")
                     if (!link.startsWith("http")) link = "$BASE_URL$link"
                     var img = imgEl?.attr("src") ?: imgEl?.attr("data-src") ?: ""
-                    if (img.isNotEmpty() && !img.startsWith("http")) img = "https:$img"
+                    img = normalizeImageUrl(img)
                     episodes.add(Episode(title, link, img))
                 }
             }
@@ -81,7 +81,7 @@ class LostFilmRepository {
                 
                 val imgEl = link.selectFirst("img") ?: link.parent()?.selectFirst("img")
                 var img = imgEl?.attr("src") ?: imgEl?.attr("data-src") ?: ""
-                if (img.isNotEmpty() && !img.startsWith("http")) img = "https:$img"
+                img = normalizeImageUrl(img)
                 
                 episodes.add(Episode(title, href, img))
             }
@@ -89,5 +89,27 @@ class LostFilmRepository {
         
         Log.d(TAG, "Total episodes: ${episodes.size}")
         episodes
+    }
+
+    /**
+     * Normalize image URLs from lostfilm.tv.
+     * Raw HTML may contain:
+     *   "//static/Images/..."          → needs proto + proper host
+     *   "/Images/..."                  → relative to base
+     *   "https://static.lostfilm.tv/.." → already good
+     */
+    private fun normalizeImageUrl(raw: String): String {
+        if (raw.isBlank()) return ""
+        return when {
+            // Protocol-relative with wrong host like "//static/Images"
+            raw.startsWith("//static/") -> "https://static.lostfilm.tv/" + raw.removePrefix("//static/")
+            // Protocol-relative with full host like "//static.lostfilm.tv/..."
+            raw.startsWith("//") -> "https:$raw"
+            // Root-relative
+            raw.startsWith("/") -> "https://static.lostfilm.tv$raw"
+            // Already absolute
+            raw.startsWith("http") -> raw
+            else -> raw
+        }
     }
 }
