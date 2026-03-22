@@ -8,9 +8,12 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -282,8 +285,15 @@ fun MainScreen(repository: LostFilmRepository) {
                 is Screen.Episodes -> {
                     val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar)
                     val imgLoader = ImageLoader.Builder(context).okHttpClient(client).build()
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(s.list) { ep ->
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 160.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(s.list.size) { i ->
+                            val ep = s.list[i]
                             EpisodeCard(ep, imgLoader) {
                                 torrentDialog = TorrentDialog.Loading
                                 scope.launch {
@@ -423,22 +433,22 @@ fun EpisodeCard(episode: Episode, imageLoader: ImageLoader, onClick: () -> Unit)
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = LF_SurfaceVar)
     ) {
-        Row {
+        Column {
             if (episode.imageUrl.isNotEmpty()) {
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current).data(episode.imageUrl).crossfade(true).build(),
                     imageLoader = imageLoader,
                     contentDescription = episode.title,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(90.dp, 130.dp)
+                    modifier = Modifier.fillMaxWidth().height(220.dp)
                 )
-            } else Box(Modifier.size(90.dp, 130.dp))
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp)) {
-                Text(episode.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = LF_TextPrimary)
-                if (episode.titleEn.isNotEmpty()) Text(episode.titleEn, style = MaterialTheme.typography.bodySmall, color = LF_TextSecondary)
+            } else Box(Modifier.fillMaxWidth().height(220.dp).background(LF_Surface))
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text(episode.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = LF_TextPrimary, maxLines = 2)
+                if (episode.titleEn.isNotEmpty()) Text(episode.titleEn, style = MaterialTheme.typography.bodySmall, color = LF_TextSecondary, maxLines = 1)
                 if (episode.episodeInfo.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(episode.episodeInfo, style = MaterialTheme.typography.bodyMedium, color = LF_RedLight)
+                    Spacer(Modifier.height(4.dp))
+                    Text(episode.episodeInfo, style = MaterialTheme.typography.bodySmall, color = LF_RedLight)
                 }
                 if (episode.date.isNotEmpty()) Text(episode.date, style = MaterialTheme.typography.labelSmall, color = LF_TextSecondary)
             }

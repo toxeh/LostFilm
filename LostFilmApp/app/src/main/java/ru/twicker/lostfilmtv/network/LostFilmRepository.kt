@@ -103,6 +103,7 @@ class LostFilmRepository {
         }
 
         Log.d(TAG, "Parsed ${episodes.size} episodes from .row elements")
+        episodes.take(3).forEach { Log.d(TAG, "  ep: ${it.title} img=${it.imageUrl} code=${it.episodeCode}") }
         episodes
     }
 
