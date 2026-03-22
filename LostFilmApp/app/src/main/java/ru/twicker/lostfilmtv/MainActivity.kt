@@ -301,6 +301,20 @@ fun MainScreen(repository: LostFilmRepository) {
                     Text("Ошибка", style = MaterialTheme.typography.titleMedium, color = LF_RedLight)
                     Spacer(Modifier.height(8.dp))
                     Text(s.message, color = LF_TextSecondary)
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { scope.launch {
+                            statusMsg = "Загрузка..."
+                            screen = Screen.Loading
+                            val client = activeClient ?: return@launch
+                            val eps = withContext(Dispatchers.IO) {
+                                try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
+                            }
+                            screen = if (eps != null) Screen.Episodes(eps)
+                                     else Screen.Error("Не удалось загрузить")
+                        }},
+                        colors = ButtonDefaults.buttonColors(containerColor = LF_Red)
+                    ) { Text("Повторить", color = Color.White) }
                 }
             }
         }
