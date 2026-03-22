@@ -15,6 +15,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -295,62 +297,71 @@ fun LoginPanel(
     var pass    by remember { mutableStateOf(savedPass.ifBlank { "REDACTED" }) }
     var captcha by remember { mutableStateOf("") }
     var currentCaptchaUrl by remember { mutableStateOf(captchaUrl) }
+    val captchaFocus = remember { FocusRequester() }
+
+    // Auto-focus captcha field
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(300)
+        try { captchaFocus.requestFocus() } catch (_: Exception) {}
+    }
 
     Column(
-        Modifier.fillMaxSize().padding(32.dp),
+        Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("LostFilm.TV", style = MaterialTheme.typography.headlineMedium, color = LF_Red, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text("Войти", style = MaterialTheme.typography.titleMedium, color = LF_TextPrimary)
-        Spacer(Modifier.height(24.dp))
-
-        OutlinedTextField(
-            value = email, onValueChange = { email = it },
-            label = { Text("Email") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            enabled = !busy
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = pass, onValueChange = { pass = it },
-            label = { Text("Пароль") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            enabled = !busy
-        )
-
-        // CAPTCHA block — always visible
+        Text("LostFilm.TV", style = MaterialTheme.typography.headlineSmall, color = LF_Red, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
-        Text("Введите текст с картинки:", color = LF_TextSecondary)
-        Spacer(Modifier.height(8.dp))
-        if (imageLoader != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(currentCaptchaUrl).crossfade(true).build(),
-                imageLoader = imageLoader,
-                contentDescription = "CAPTCHA",
-                modifier = Modifier.fillMaxWidth().height(80.dp)
-            )
+
+        // ── Two-column row: [email+pass] | [captcha image + captcha input] ──
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Left column : credentials
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = email, onValueChange = { email = it },
+                    label = { Text("Email") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    enabled = !busy
+                )
+                OutlinedTextField(
+                    value = pass, onValueChange = { pass = it },
+                    label = { Text("Пароль") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    enabled = !busy
+                )
+            }
+            // Right column : captcha
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (imageLoader != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current).data(currentCaptchaUrl).crossfade(true).build(),
+                        imageLoader = imageLoader,
+                        contentDescription = "CAPTCHA",
+                        modifier = Modifier.fillMaxWidth().height(64.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = captcha, onValueChange = { captcha = it },
+                    label = { Text("Код с картинки") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(captchaFocus),
+                    enabled = !busy
+                )
+                TextButton(onClick = { currentCaptchaUrl = freshCaptchaUrl(); captcha = "" },
+                    modifier = Modifier.align(Alignment.End),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) { Text("↻ Обновить", color = LF_RedLight, style = MaterialTheme.typography.labelSmall) }
+            }
         }
-        TextButton(onClick = { currentCaptchaUrl = freshCaptchaUrl(); captcha = "" }) {
-            Text("Обновить картинку", color = LF_RedLight)
-        }
-        OutlinedTextField(
-            value = captcha, onValueChange = { captcha = it },
-            label = { Text("Код с картинки") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !busy
-        )
 
         if (error != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(error, style = MaterialTheme.typography.bodySmall, color = LF_RedLight)
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(12.dp))
         Button(
             onClick = { onLogin(email.trim(), pass, captcha.ifBlank { null }) },
             modifier = Modifier.fillMaxWidth(),
