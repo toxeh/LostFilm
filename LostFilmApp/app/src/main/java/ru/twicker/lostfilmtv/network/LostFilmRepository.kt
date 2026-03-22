@@ -10,7 +10,10 @@ import org.jsoup.Jsoup
 private const val TAG = "LFRepository"
 
 data class Episode(
-    val title: String,
+    val title: String,        // «Неуязвимый»
+    val titleEn: String,      // «Invincible»
+    val episodeInfo: String,  // «4 сезон 3 серия»
+    val date: String,         // «22.03.2026»
     val detailsUrl: String,
     val imageUrl: String
 )
@@ -46,48 +49,40 @@ class LostFilmRepository {
         
         val document = Jsoup.parse(html)
         val episodes = mutableListOf<Episode>()
-        
-        // Try various selectors lostfilm.tv may use
-        val rows = document.select(".row-simple")
-        Log.d(TAG, "Found ${rows.size} .row-simple elements")
-        
-        if (rows.isNotEmpty()) {
-            for (row in rows) {
-                val titleEl = row.selectFirst(".name-ru")
-                val linkEl = row.selectFirst("a")
-                val imgEl = row.selectFirst("img")
-                if (titleEl != null && linkEl != null) {
-                    val title = titleEl.text()
-                    var link = linkEl.attr("href")
-                    if (!link.startsWith("http")) link = "$BASE_URL$link"
-                    var img = imgEl?.attr("src") ?: imgEl?.attr("data-src") ?: ""
-                    img = normalizeImageUrl(img)
-                    episodes.add(Episode(title, link, img))
-                }
+
+        // lostfilm.tv /new page structure: div.row > a[href] > div.picture-box > img.thumb
+        //                                               > div.body > .name-ru, .name-en
+        //                                                          > .details-pane .alpha (episode name)
+        //              div.overlay .left-part = "4 сезон 3 серия"
+        //              div.overlay .right-part = «22.03.2026»
+        val rows = document.select("div.row")
+        Log.d(TAG, "Found ${rows.size} .row elements")
+
+        for (row in rows) {
+            val link = row.selectFirst("a[href]") ?: continue
+            val href = link.attr("href").let {
+                if (it.startsWith("http")) it else "$BASE_URL$it"
             }
-        } else {
-            // Fallback: parse any links to series
-            val allLinks = document.select("a[href*=/series/]")
-            Log.d(TAG, "Fallback: ${allLinks.size} links to /series/")
-            
-            for (link in allLinks) {
-                val title = link.selectFirst(".name-ru")?.text()
-                    ?: link.selectFirst(".title-ru")?.text()
-                    ?: link.text()
-                if (title.isBlank()) continue
-                
-                var href = link.attr("href")
-                if (!href.startsWith("http")) href = "$BASE_URL$href"
-                
-                val imgEl = link.selectFirst("img") ?: link.parent()?.selectFirst("img")
-                var img = imgEl?.attr("src") ?: imgEl?.attr("data-src") ?: ""
-                img = normalizeImageUrl(img)
-                
-                episodes.add(Episode(title, href, img))
-            }
+            val nameRu   = row.selectFirst(".name-ru")?.text().orEmpty()
+            val nameEn   = row.selectFirst(".name-en")?.text().orEmpty()
+            val leftPart = row.selectFirst(".overlay .left-part")?.text().orEmpty()   // «4 сезон 3 серия»
+            val rightPart = row.selectFirst(".overlay .right-part")?.text().orEmpty() // «22.03.2026»
+            val img = normalizeImageUrl(
+                row.selectFirst("img.thumb")?.attr("src")
+                    ?: row.selectFirst("img")?.attr("src").orEmpty()
+            )
+            if (nameRu.isBlank() && nameEn.isBlank()) continue
+            episodes.add(Episode(
+                title       = nameRu.ifBlank { nameEn },
+                titleEn     = nameEn,
+                episodeInfo = leftPart,
+                date        = rightPart,
+                detailsUrl  = href,
+                imageUrl    = img
+            ))
         }
-        
-        Log.d(TAG, "Total episodes: ${episodes.size}")
+
+        Log.d(TAG, "Parsed ${episodes.size} episodes from .row elements")
         episodes
     }
 
