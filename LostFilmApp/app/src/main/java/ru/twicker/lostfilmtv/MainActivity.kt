@@ -171,16 +171,25 @@ fun MainScreen(repository: LostFilmRepository) {
         if (!ok) { screen = Screen.Error("ciadpi не запустился"); return@LaunchedEffect }
         val client = NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
 
-        // Clear stale cookies and establish fresh PHPSESSID
+        val creds = LostFilmAuth.loadCredentials(context)
+        savedEmail = creds?.first ?: ""; savedPass = creds?.second ?: ""
+
+        // 1. Try existing session cookies — load episodes directly
+        if (cookieJar.hasSession()) {
+            statusMsg = "Загрузка..."
+            val eps = withContext(Dispatchers.IO) {
+                try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
+            }
+            if (eps != null) {
+                screen = Screen.Episodes(eps)
+                return@LaunchedEffect
+            }
+            Log.d(TAG, "Existing session expired, need fresh login")
+        }
+
+        // 2. Session dead → fresh login with captcha
         cookieJar.clearSession()
         withContext(Dispatchers.IO) { LostFilmAuth.initSession(client) }
-
-        val creds = LostFilmAuth.loadCredentials(context)
-        val email = creds?.first ?: ""
-        val pass = creds?.second ?: ""
-        savedEmail = email; savedPass = pass
-
-        // Always show login screen with captcha — no priming POST
         val bmp = loadCaptcha(client)
         screen = Screen.Login(captchaBitmap = bmp)
     }
