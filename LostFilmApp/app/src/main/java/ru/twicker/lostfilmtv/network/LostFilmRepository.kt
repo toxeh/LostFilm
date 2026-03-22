@@ -35,7 +35,7 @@ sealed class TorrentsResult {
 
 
 class LostFilmRepository {
-    private val BASE_URL = "https://www.lostfilm.tv"
+    private val BASE_URL = "https://lostfilm.tv"
 
     suspend fun getRecentEpisodes(client: OkHttpClient = NetworkClient.createProxiedClient()): List<Episode> = withContext(Dispatchers.IO) {
         Log.d(TAG, "Loading recent episodes from $BASE_URL/new")

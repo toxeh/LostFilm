@@ -88,7 +88,7 @@ fun LostFilmTheme(content: @Composable () -> Unit) {
     )
 }
 
-private fun freshCaptchaUrl() = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+private fun freshCaptchaUrl() = "https://lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
 
 // ─── States ───────────────────────────────────────────────────────────────────
 private sealed class Screen {
