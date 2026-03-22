@@ -35,7 +35,7 @@ sealed class TorrentsResult {
 
 
 class LostFilmRepository {
-    private val BASE_URL = "https://www.lostfilm.tv"
+    private val BASE_URL = "https://lostfilm.tv"
 
     suspend fun getRecentEpisodes(client: OkHttpClient = NetworkClient.createProxiedClient()): List<Episode> = withContext(Dispatchers.IO) {
         Log.d(TAG, "Loading recent episodes from $BASE_URL/new")
@@ -185,11 +185,9 @@ class LostFilmRepository {
      */
     private fun normalizeImageUrl(raw: String): String {
         if (raw.isBlank()) return ""
-        val CDN = "https://static.lostfilm.top"
         return when {
-            raw.startsWith("//static/")  -> "$CDN/" + raw.removePrefix("//static/")
             raw.startsWith("//")         -> "https:$raw"
-            raw.startsWith("/")          -> "$CDN$raw"
+            raw.startsWith("/")          -> "$BASE_URL$raw"
             raw.startsWith("http")       -> raw
             else                         -> raw
         }
