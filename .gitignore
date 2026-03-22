@@ -3,3 +3,7 @@
 *.apk
 decompiled/
 android-sdk/
+byedpi-*.tar.gz
+ciadpi-aarch64
+ciadpi-armv7l
+tls_split_test.py
