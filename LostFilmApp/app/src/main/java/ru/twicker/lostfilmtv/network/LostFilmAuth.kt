@@ -156,7 +156,7 @@ object LostFilmAuth {
 
             val json = JSONObject(text)
             when {
-                json.optInt("success") == 1 -> {
+                json.optBoolean("success") || json.optInt("success") == 1 -> {
                     saveCredentials(context, email, password)
                     Log.i(TAG, "Login successful")
                     LoginResult.Success
@@ -166,8 +166,16 @@ object LostFilmAuth {
                     Log.d(TAG, "CAPTCHA required → $captchaUrl")
                     LoginResult.NeedCaptcha(captchaUrl)
                 }
-                json.has("error") -> LoginResult.Error(json.getString("error"))
-                json.has("notice") -> LoginResult.Error(json.getString("notice"))
+                json.has("error") -> {
+                    val errVal = json.get("error")
+                    val msg = when (errVal) {
+                        is String -> errVal
+                        is Number -> if (errVal.toInt() == 1) "Неверный логин/пароль или каптча" else "Ошибка #$errVal"
+                        else -> errVal.toString()
+                    }
+                    LoginResult.Error(msg)
+                }
+                json.has("notice") -> LoginResult.Error(json.optString("notice", "Ошибка"))
                 else -> LoginResult.Error("Неизвестная ошибка: $text")
             }
         } catch (e: Exception) {

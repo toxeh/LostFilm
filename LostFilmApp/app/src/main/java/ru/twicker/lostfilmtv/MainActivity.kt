@@ -307,7 +307,7 @@ fun LoginPanel(
 
     Column(
         Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.Top,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("LostFilm.TV", style = MaterialTheme.typography.headlineSmall, color = LF_Red, fontWeight = FontWeight.Bold)
