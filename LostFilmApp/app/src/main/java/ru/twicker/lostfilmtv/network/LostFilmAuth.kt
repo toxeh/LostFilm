@@ -108,23 +108,44 @@ object LostFilmAuth {
             .remove("cookies").apply()
     }
 
+    sealed class LoginResult {
+        object Success : LoginResult()
+        /** Server wants CAPTCHA — show captchaImageUrl to user, then re-call login with captcha= */
+        data class NeedCaptcha(val captchaImageUrl: String) : LoginResult()
+        data class Error(val message: String) : LoginResult()
+    }
+
     /**
-     * Perform login. Returns null on success, error message on failure.
+     * Perform login. If captcha is non-null, include it in the form.
      * Must be called on IO dispatcher.
+     *
+     * Flow:
+     *   1. POST with email+pass → may get {need_captcha:true, result:"ok"}
+     *   2. Return NeedCaptcha — UI shows /simple_captcha.php image + input
+     *   3. POST with email+pass+need_captcha=1+captcha=<text> → success or error
      */
-    fun login(context: Context, client: OkHttpClient, email: String, password: String): String? {
+    fun login(
+        context: Context,
+        client: OkHttpClient,
+        email: String,
+        password: String,
+        captcha: String? = null
+    ): LoginResult {
         return try {
-            val body = FormBody.Builder()
+            val bodyBuilder = FormBody.Builder()
                 .add("act", "users")
                 .add("type", "login")
                 .add("mail", email)
                 .add("pass", password)
-                .add("rem", "1")       // remember me
-                .build()
+                .add("rem", "1")
+            if (captcha != null) {
+                bodyBuilder.add("need_captcha", "1")
+                bodyBuilder.add("captcha", captcha)
+            }
 
             val request = Request.Builder()
                 .url("https://www.lostfilm.tv/ajaxik.users.php")
-                .post(body)
+                .post(bodyBuilder.build())
                 .header("Referer", "https://www.lostfilm.tv/login/")
                 .header("X-Requested-With", "XMLHttpRequest")
                 .build()
@@ -138,15 +159,20 @@ object LostFilmAuth {
                 json.optInt("success") == 1 -> {
                     saveCredentials(context, email, password)
                     Log.i(TAG, "Login successful")
-                    null // success
+                    LoginResult.Success
                 }
-                json.has("error") -> json.getString("error")
-                json.has("notice") -> json.getString("notice")
-                else -> "Неизвестная ошибка: $text"
+                json.optBoolean("need_captcha") -> {
+                    val captchaUrl = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+                    Log.d(TAG, "CAPTCHA required → $captchaUrl")
+                    LoginResult.NeedCaptcha(captchaUrl)
+                }
+                json.has("error") -> LoginResult.Error(json.getString("error"))
+                json.has("notice") -> LoginResult.Error(json.getString("notice"))
+                else -> LoginResult.Error("Неизвестная ошибка: $text")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Login failed: ${e.message}", e)
-            "Ошибка сети: ${e.message}"
+            LoginResult.Error("Ошибка сети: ${e.message}")
         }
     }
 }

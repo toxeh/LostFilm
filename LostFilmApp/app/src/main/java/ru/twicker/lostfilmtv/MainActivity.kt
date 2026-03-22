@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -37,14 +38,24 @@ import ru.twicker.lostfilmtv.network.TorrentsResult
 
 private const val TAG = "MainActivity"
 
+// ─── Original LostFilm colors ─────────────────────────────────────────────────
+private val LF_Primary      = Color(0xFF222538)   // colorPrimary from decompiled
+private val LF_PrimaryDark  = Color(0xFF14181C)   // colorPrimaryDark (window bg)
+private val LF_Surface      = Color(0xFF1A1D2E)   // slightly lighter than primary
+private val LF_SurfaceVar   = Color(0xFF2A2D42)   // card backgrounds
+private val LF_Red          = Color(0xFFC52400)   // LostFilm red accent
+private val LF_RedLight     = Color(0xFFE53935)   // lighter red for text/icons
+private val LF_TextPrimary  = Color(0xFFEEEEEE)   // lb_browse_title_color
+private val LF_TextSecondary= Color(0xB3EEEEEE)   // lb_details_description_body
+private val LF_OnPrimary    = Color.White
+
 class MainActivity : ComponentActivity() {
     private val repository = LostFilmRepository()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            LostFilmAppTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            LostFilmTheme {
+                Surface(Modifier.fillMaxSize(), color = LF_PrimaryDark) {
                     MainScreen(repository)
                 }
             }
@@ -53,15 +64,32 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun LostFilmAppTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = darkColorScheme(), content = content)
+fun LostFilmTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary       = LF_Red,
+            onPrimary     = LF_OnPrimary,
+            secondary     = LF_RedLight,
+            background    = LF_PrimaryDark,
+            surface       = LF_Surface,
+            surfaceVariant= LF_SurfaceVar,
+            onBackground  = LF_TextPrimary,
+            onSurface     = LF_TextPrimary,
+            onSurfaceVariant = LF_TextSecondary,
+            error         = LF_RedLight,
+        ),
+        content = content
+    )
 }
 
 // ─── States ───────────────────────────────────────────────────────────────────
-
 private sealed class Screen {
     object Loading : Screen()
-    data class Login(val error: String? = null, val busy: Boolean = false) : Screen()
+    data class Login(
+        val error: String? = null,
+        val busy: Boolean = false,
+        val captchaUrl: String? = null  // if non-null, show captcha image+input
+    ) : Screen()
     data class Episodes(val list: List<Episode>) : Screen()
     data class Error(val message: String) : Screen()
 }
@@ -75,7 +103,6 @@ private sealed class TorrentDialog {
 }
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(repository: LostFilmRepository) {
@@ -87,78 +114,90 @@ fun MainScreen(repository: LostFilmRepository) {
     val scope = rememberCoroutineScope()
     val cookieJar = remember { LostFilmAuth.cookieJar(context) }
 
-    // ── Helper ────────────────────────────────────────────────────────────────
-    suspend fun doLogin(email: String, pass: String) {
-        screen = Screen.Login(busy = true)
+    // saved email/pass for CAPTCHA re-submit
+    var savedEmail by remember { mutableStateOf("") }
+    var savedPass  by remember { mutableStateOf("") }
+
+    // ── doLogin helper ───────────────────────────────────────────────────────
+    suspend fun doLogin(email: String, pass: String, captcha: String? = null) {
+        savedEmail = email; savedPass = pass
+        screen = Screen.Login(busy = true, captchaUrl = if (captcha != null) (screen as? Screen.Login)?.captchaUrl else null)
         val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
-        val err = withContext(Dispatchers.IO) { LostFilmAuth.login(context, client, email, pass) }
-        if (err != null) { screen = Screen.Login(error = err); return }
-        statusMsg = "Загрузка..."
-        val eps = withContext(Dispatchers.IO) {
-            try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
+        val result = withContext(Dispatchers.IO) {
+            LostFilmAuth.login(context, client, email, pass, captcha)
         }
-        screen = if (eps != null) Screen.Episodes(eps)
-                 else Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
+        when (result) {
+            is LostFilmAuth.LoginResult.Success -> {
+                statusMsg = "Загрузка..."
+                val eps = withContext(Dispatchers.IO) {
+                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
+                }
+                screen = if (eps != null) Screen.Episodes(eps)
+                         else Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
+            }
+            is LostFilmAuth.LoginResult.NeedCaptcha -> {
+                screen = Screen.Login(captchaUrl = result.captchaImageUrl)
+            }
+            is LostFilmAuth.LoginResult.Error -> {
+                screen = Screen.Login(error = result.message)
+            }
+        }
     }
 
     // ── Startup ──────────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
         val ok = withContext(Dispatchers.IO) { CiadpiRunner.start(context) }
         if (!ok) { screen = Screen.Error("ciadpi не запустился"); return@LaunchedEffect }
-
         val client = NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
 
-        // If no saved credentials → show login immediately
         val creds = LostFilmAuth.loadCredentials(context)
-        if (creds == null) {
-            screen = Screen.Login(); return@LaunchedEffect
-        }
+        if (creds == null) { screen = Screen.Login(); return@LaunchedEffect }
 
-        // Auto-login with saved credentials
         statusMsg = "Авторизация..."
-        val loginErr = withContext(Dispatchers.IO) { LostFilmAuth.login(context, client, creds.first, creds.second) }
-        if (loginErr != null) {
-            screen = Screen.Login(error = "Сохранённый логин не работает: $loginErr"); return@LaunchedEffect
+        savedEmail = creds.first; savedPass = creds.second
+        val loginRes = withContext(Dispatchers.IO) {
+            LostFilmAuth.login(context, client, creds.first, creds.second)
         }
-
-        statusMsg = "Загрузка..."
-        val eps = withContext(Dispatchers.IO) {
-            try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
+        when (loginRes) {
+            is LostFilmAuth.LoginResult.Success -> {
+                statusMsg = "Загрузка..."
+                val eps = withContext(Dispatchers.IO) {
+                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
+                }
+                screen = if (eps != null) Screen.Episodes(eps) else Screen.Error("Не удалось загрузить")
+            }
+            is LostFilmAuth.LoginResult.NeedCaptcha -> {
+                screen = Screen.Login(captchaUrl = loginRes.captchaImageUrl)
+            }
+            is LostFilmAuth.LoginResult.Error -> {
+                screen = Screen.Login(error = "Сохранённый логин: ${loginRes.message}")
+            }
         }
-        screen = if (eps != null) Screen.Episodes(eps) else Screen.Error("Не удалось загрузить список")
     }
 
     // ── Torrent dialog ────────────────────────────────────────────────────────
     when (val td = torrentDialog) {
         is TorrentDialog.None -> {}
-
         is TorrentDialog.Loading -> AlertDialog(
             onDismissRequest = { torrentDialog = TorrentDialog.None },
-            title = { Text("Загрузка торрентов...") },
-            text = { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } },
+            title = { Text("Загрузка...") },
+            text = { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = LF_Red) } },
             confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Отмена") } }
         )
-
         is TorrentDialog.Loaded -> AlertDialog(
             onDismissRequest = { torrentDialog = TorrentDialog.None },
             title = { Text(td.episode.title) },
             text = {
-                if (td.entries.isEmpty()) {
-                    Text("Торренты не найдены для этого эпизода.")
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(td.entries) { t ->
-                            OutlinedCard(modifier = Modifier.fillMaxWidth().clickable {
-                                torrentDialog = TorrentDialog.None
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url)))
-                            }) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Text(t.quality, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    if (t.sizeMb.isNotBlank()) {
-                                        Text(t.sizeMb, style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
+                if (td.entries.isEmpty()) Text("Торренты не найдены.")
+                else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(td.entries) { t ->
+                        OutlinedCard(Modifier.fillMaxWidth().clickable {
+                            torrentDialog = TorrentDialog.None
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url)))
+                        }) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(t.quality, fontWeight = FontWeight.Bold, color = LF_RedLight)
+                                if (t.sizeMb.isNotBlank()) Text(t.sizeMb, style = MaterialTheme.typography.bodySmall, color = LF_TextSecondary)
                             }
                         }
                     }
@@ -166,47 +205,36 @@ fun MainScreen(repository: LostFilmRepository) {
             },
             confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Закрыть") } }
         )
-
         is TorrentDialog.NeedAuth -> AlertDialog(
             onDismissRequest = { torrentDialog = TorrentDialog.None },
             title = { Text("Требуется авторизация") },
             text = { Text("Для скачивания торрентов нужно войти в LostFilm.TV.") },
-            confirmButton = {
-                Button(onClick = {
-                    torrentDialog = TorrentDialog.None
-                    screen = Screen.Login()
-                }) { Text("Войти") }
-            },
-            dismissButton = {
-                TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Закрыть") }
-            }
+            confirmButton = { Button(onClick = { torrentDialog = TorrentDialog.None; screen = Screen.Login() }, colors = ButtonDefaults.buttonColors(containerColor = LF_Red)) { Text("Войти") } },
+            dismissButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Закрыть") } }
         )
-
         is TorrentDialog.Err -> AlertDialog(
             onDismissRequest = { torrentDialog = TorrentDialog.None },
-            title = { Text("Ошибка") },
-            text = { Text(td.message) },
+            title = { Text("Ошибка") }, text = { Text(td.message) },
             confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("OK") } }
         )
     }
 
     // ── Scaffold ──────────────────────────────────────────────────────────────
     Scaffold(
+        containerColor = LF_PrimaryDark,
         topBar = {
             TopAppBar(
-                title = { Text("LostFilm") },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                title = { Text("LostFilm", color = LF_Red, fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = LF_Primary),
                 actions = {
                     if (screen is Screen.Episodes) {
                         TextButton(onClick = {
                             scope.launch {
                                 val client = activeClient ?: return@launch
-                                val eps = withContext(Dispatchers.IO) {
-                                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
-                                }
+                                val eps = withContext(Dispatchers.IO) { try { repository.getRecentEpisodes(client) } catch (_: Exception) { null } }
                                 if (eps != null) screen = Screen.Episodes(eps)
                             }
-                        }) { Text("↻") }
+                        }) { Text("↻", color = LF_TextPrimary) }
                     }
                 }
             )
@@ -214,54 +242,39 @@ fun MainScreen(repository: LostFilmRepository) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (val s = screen) {
-
-                is Screen.Loading -> Column(
-                    Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator()
+                is Screen.Loading -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = LF_Red)
                     Spacer(Modifier.height(16.dp))
-                    Text(statusMsg, style = MaterialTheme.typography.bodyMedium)
+                    Text(statusMsg, color = LF_TextSecondary)
                 }
-
                 is Screen.Login -> LoginPanel(
-                    error = s.error, busy = s.busy,
-                    onLogin = { email, pass -> scope.launch { doLogin(email, pass) } }
+                    error = s.error, busy = s.busy, captchaUrl = s.captchaUrl,
+                    imageLoader = activeClient?.let { ImageLoader.Builder(context).okHttpClient(it).build() },
+                    onLogin = { email, pass, captcha -> scope.launch { doLogin(email, pass, captcha) } },
+                    savedEmail = savedEmail, savedPass = savedPass
                 )
-
                 is Screen.Episodes -> {
                     val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar)
-                    val imgLoader = ImageLoader.Builder(LocalContext.current).okHttpClient(client).build()
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
+                    val imgLoader = ImageLoader.Builder(context).okHttpClient(client).build()
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(s.list) { ep ->
                             EpisodeCard(ep, imgLoader) {
                                 torrentDialog = TorrentDialog.Loading
                                 scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        repository.getTorrents(client, ep.episodeCode)
-                                    }
-                                    torrentDialog = when (result) {
-                                        is TorrentsResult.Success  -> TorrentDialog.Loaded(ep, result.entries)
+                                    torrentDialog = when (val r = withContext(Dispatchers.IO) { repository.getTorrents(client, ep.episodeCode) }) {
+                                        is TorrentsResult.Success  -> TorrentDialog.Loaded(ep, r.entries)
                                         is TorrentsResult.NeedAuth -> TorrentDialog.NeedAuth(ep)
-                                        is TorrentsResult.Error    -> TorrentDialog.Err(ep, result.message)
+                                        is TorrentsResult.Error    -> TorrentDialog.Err(ep, r.message)
                                     }
                                 }
                             }
                         }
                     }
                 }
-
-                is Screen.Error -> Column(
-                    Modifier.align(Alignment.Center).padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("Ошибка", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+                is Screen.Error -> Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Ошибка", style = MaterialTheme.typography.titleMedium, color = LF_RedLight)
                     Spacer(Modifier.height(8.dp))
-                    Text(s.message, style = MaterialTheme.typography.bodySmall)
+                    Text(s.message, color = LF_TextSecondary)
                 }
             }
         }
@@ -269,19 +282,30 @@ fun MainScreen(repository: LostFilmRepository) {
 }
 
 // ─── Login Panel ──────────────────────────────────────────────────────────────
-
 @Composable
-fun LoginPanel(error: String?, busy: Boolean, onLogin: (String, String) -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var pass  by remember { mutableStateOf("") }
+fun LoginPanel(
+    error: String?, busy: Boolean, captchaUrl: String?,
+    imageLoader: ImageLoader?,
+    onLogin: (String, String, String?) -> Unit,
+    savedEmail: String, savedPass: String
+) {
+    var email   by remember { mutableStateOf(savedEmail) }
+    var pass    by remember { mutableStateOf(savedPass) }
+    var captcha by remember { mutableStateOf("") }
+
+    // Reset captcha text when captchaUrl changes
+    LaunchedEffect(captchaUrl) { captcha = "" }
 
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Войти в LostFilm.TV", style = MaterialTheme.typography.headlineSmall)
+        Text("LostFilm.TV", style = MaterialTheme.typography.headlineMedium, color = LF_Red, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Войти", style = MaterialTheme.typography.titleMedium, color = LF_TextPrimary)
         Spacer(Modifier.height(24.dp))
+
         OutlinedTextField(
             value = email, onValueChange = { email = it },
             label = { Text("Email") }, singleLine = true,
@@ -298,59 +322,73 @@ fun LoginPanel(error: String?, busy: Boolean, onLogin: (String, String) -> Unit)
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             enabled = !busy
         )
+
+        // CAPTCHA block
+        if (captchaUrl != null) {
+            Spacer(Modifier.height(16.dp))
+            Text("Введите текст с картинки:", color = LF_TextSecondary)
+            Spacer(Modifier.height(8.dp))
+            if (imageLoader != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(captchaUrl).crossfade(true).build(),
+                    imageLoader = imageLoader,
+                    contentDescription = "CAPTCHA",
+                    modifier = Modifier.fillMaxWidth().height(80.dp)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = captcha, onValueChange = { captcha = it },
+                label = { Text("Код с картинки") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy
+            )
+        }
+
         if (error != null) {
             Spacer(Modifier.height(8.dp))
-            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Text(error, style = MaterialTheme.typography.bodySmall, color = LF_RedLight)
         }
+
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = { onLogin(email.trim(), pass) },
+            onClick = { onLogin(email.trim(), pass, if (captchaUrl != null) captcha else null) },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !busy && email.isNotBlank() && pass.isNotBlank()
+            enabled = !busy && email.isNotBlank() && pass.isNotBlank() && (captchaUrl == null || captcha.isNotBlank()),
+            colors = ButtonDefaults.buttonColors(containerColor = LF_Red)
         ) {
-            if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            else Text("Войти")
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+            else Text("Войти", color = Color.White)
         }
     }
 }
 
 // ─── Episode Card ─────────────────────────────────────────────────────────────
-
 @Composable
 fun EpisodeCard(episode: Episode, imageLoader: ImageLoader, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(containerColor = LF_SurfaceVar)
     ) {
         Row {
             if (episode.imageUrl.isNotEmpty()) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(episode.imageUrl).crossfade(true).build(),
+                    model = ImageRequest.Builder(LocalContext.current).data(episode.imageUrl).crossfade(true).build(),
                     imageLoader = imageLoader,
                     contentDescription = episode.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.size(90.dp, 130.dp)
                 )
-            } else {
-                Box(Modifier.size(90.dp, 130.dp))
-            }
+            } else Box(Modifier.size(90.dp, 130.dp))
             Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp)) {
-                Text(episode.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                if (episode.titleEn.isNotEmpty()) {
-                    Text(episode.titleEn, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Text(episode.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = LF_TextPrimary)
+                if (episode.titleEn.isNotEmpty()) Text(episode.titleEn, style = MaterialTheme.typography.bodySmall, color = LF_TextSecondary)
                 if (episode.episodeInfo.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
-                    Text(episode.episodeInfo, style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary)
+                    Text(episode.episodeInfo, style = MaterialTheme.typography.bodyMedium, color = LF_RedLight)
                 }
-                if (episode.date.isNotEmpty()) {
-                    Text(episode.date, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                if (episode.date.isNotEmpty()) Text(episode.date, style = MaterialTheme.typography.labelSmall, color = LF_TextSecondary)
             }
         }
     }
