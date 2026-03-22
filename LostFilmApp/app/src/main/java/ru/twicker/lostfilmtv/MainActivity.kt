@@ -82,13 +82,15 @@ fun LostFilmTheme(content: @Composable () -> Unit) {
     )
 }
 
+private fun freshCaptchaUrl() = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+
 // ─── States ───────────────────────────────────────────────────────────────────
 private sealed class Screen {
     object Loading : Screen()
     data class Login(
         val error: String? = null,
         val busy: Boolean = false,
-        val captchaUrl: String? = null  // if non-null, show captcha image+input
+        val captchaUrl: String = freshCaptchaUrl()  // always show captcha
     ) : Screen()
     data class Episodes(val list: List<Episode>) : Screen()
     data class Error(val message: String) : Screen()
@@ -121,7 +123,7 @@ fun MainScreen(repository: LostFilmRepository) {
     // ── doLogin helper ───────────────────────────────────────────────────────
     suspend fun doLogin(email: String, pass: String, captcha: String? = null) {
         savedEmail = email; savedPass = pass
-        screen = Screen.Login(busy = true, captchaUrl = if (captcha != null) (screen as? Screen.Login)?.captchaUrl else null)
+        screen = Screen.Login(busy = true, captchaUrl = (screen as? Screen.Login)?.captchaUrl ?: freshCaptchaUrl())
         val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
         val result = withContext(Dispatchers.IO) {
             LostFilmAuth.login(context, client, email, pass, captcha)
@@ -284,17 +286,15 @@ fun MainScreen(repository: LostFilmRepository) {
 // ─── Login Panel ──────────────────────────────────────────────────────────────
 @Composable
 fun LoginPanel(
-    error: String?, busy: Boolean, captchaUrl: String?,
+    error: String?, busy: Boolean, captchaUrl: String,
     imageLoader: ImageLoader?,
     onLogin: (String, String, String?) -> Unit,
     savedEmail: String, savedPass: String
 ) {
-    var email   by remember { mutableStateOf(savedEmail) }
-    var pass    by remember { mutableStateOf(savedPass) }
+    var email   by remember { mutableStateOf(savedEmail.ifBlank { "user@example.com" }) }
+    var pass    by remember { mutableStateOf(savedPass.ifBlank { "REDACTED" }) }
     var captcha by remember { mutableStateOf("") }
-
-    // Reset captcha text when captchaUrl changes
-    LaunchedEffect(captchaUrl) { captcha = "" }
+    var currentCaptchaUrl by remember { mutableStateOf(captchaUrl) }
 
     Column(
         Modifier.fillMaxSize().padding(32.dp),
@@ -323,27 +323,27 @@ fun LoginPanel(
             enabled = !busy
         )
 
-        // CAPTCHA block
-        if (captchaUrl != null) {
-            Spacer(Modifier.height(16.dp))
-            Text("Введите текст с картинки:", color = LF_TextSecondary)
-            Spacer(Modifier.height(8.dp))
-            if (imageLoader != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current).data(captchaUrl).crossfade(true).build(),
-                    imageLoader = imageLoader,
-                    contentDescription = "CAPTCHA",
-                    modifier = Modifier.fillMaxWidth().height(80.dp)
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = captcha, onValueChange = { captcha = it },
-                label = { Text("Код с картинки") }, singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !busy
+        // CAPTCHA block — always visible
+        Spacer(Modifier.height(16.dp))
+        Text("Введите текст с картинки:", color = LF_TextSecondary)
+        Spacer(Modifier.height(8.dp))
+        if (imageLoader != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current).data(currentCaptchaUrl).crossfade(true).build(),
+                imageLoader = imageLoader,
+                contentDescription = "CAPTCHA",
+                modifier = Modifier.fillMaxWidth().height(80.dp)
             )
         }
+        TextButton(onClick = { currentCaptchaUrl = freshCaptchaUrl(); captcha = "" }) {
+            Text("Обновить картинку", color = LF_RedLight)
+        }
+        OutlinedTextField(
+            value = captcha, onValueChange = { captcha = it },
+            label = { Text("Код с картинки") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !busy
+        )
 
         if (error != null) {
             Spacer(Modifier.height(8.dp))
@@ -352,9 +352,9 @@ fun LoginPanel(
 
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = { onLogin(email.trim(), pass, if (captchaUrl != null) captcha else null) },
+            onClick = { onLogin(email.trim(), pass, captcha.ifBlank { null }) },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !busy && email.isNotBlank() && pass.isNotBlank() && (captchaUrl == null || captcha.isNotBlank()),
+            enabled = !busy && email.isNotBlank() && pass.isNotBlank() && captcha.isNotBlank(),
             colors = ButtonDefaults.buttonColors(containerColor = LF_Red)
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
