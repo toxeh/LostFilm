@@ -140,14 +140,16 @@ object LostFilmAuth {
     fun isAuthenticated(client: OkHttpClient): Boolean {
         return try {
             val req = Request.Builder()
-                .url("https://www.lostfilm.tv/my")
+                .url("https://www.lostfilm.tv/")
                 .header("User-Agent", "Mozilla/5.0")
                 .build()
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
             resp.close()
-            val authed = !body.contains("Войдите или зарегистрируйтесь") && !body.contains("ajaxik.users")
-            Log.d(TAG, "isAuthenticated: $authed (${resp.code}, ${body.length} chars)")
+            // If page has "Вход" link in nav — not authenticated
+            val hasLoginLink = body.contains(">Вход<") || body.contains(">Регистрация<")
+            val authed = !hasLoginLink
+            Log.d(TAG, "isAuthenticated: $authed (${body.length} chars, hasLoginLink=$hasLoginLink)")
             authed
         } catch (e: Exception) {
             Log.e(TAG, "isAuthenticated failed: ${e.message}")
