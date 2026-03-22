@@ -88,7 +88,7 @@ fun LostFilmTheme(content: @Composable () -> Unit) {
     )
 }
 
-private fun freshCaptchaUrl() = "https://lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+private fun freshCaptchaUrl() = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
 
 // ─── States ───────────────────────────────────────────────────────────────────
 private sealed class Screen {
@@ -183,12 +183,11 @@ fun MainScreen(repository: LostFilmRepository) {
                 val eps = withContext(Dispatchers.IO) {
                     try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
                 }
-                if (eps != null) {
-                    screen = Screen.Episodes(eps)
-                    return@LaunchedEffect
-                }
+                screen = if (eps != null) Screen.Episodes(eps)
+                         else Screen.Error("Авторизован, но не удалось загрузить список")
+                return@LaunchedEffect
             }
-            Log.d(TAG, "Session expired or not authenticated, need fresh login")
+            Log.d(TAG, "Session expired, need fresh login")
         }
 
         // 2. Session dead → fresh login with captcha

@@ -18,7 +18,7 @@ private const val PREFS = "lostfilm_auth"
 /**
  * Handles lostfilm.tv authentication.
  *
- * Login endpoint: POST https://lostfilm.tv/ajaxik.users.php
+ * Login endpoint: POST https://www.lostfilm.tv/ajaxik.users.php
  * Fields: act=users, type=login, mail=<email>, pass=<password>, rem=1
  *
  * On success response: {"success":1,...} + Set-Cookie session cookies.
@@ -122,7 +122,7 @@ object LostFilmAuth {
     fun initSession(client: OkHttpClient) {
         try {
             val req = Request.Builder()
-                .url("https://lostfilm.tv/login/")
+                .url("https://www.lostfilm.tv/login/")
                 .header("User-Agent", "Mozilla/5.0")
                 .build()
             val resp = client.newCall(req).execute()
@@ -140,7 +140,7 @@ object LostFilmAuth {
     fun isAuthenticated(client: OkHttpClient): Boolean {
         return try {
             val req = Request.Builder()
-                .url("https://lostfilm.tv/my")
+                .url("https://www.lostfilm.tv/my")
                 .header("User-Agent", "Mozilla/5.0")
                 .build()
             val resp = client.newCall(req).execute()
@@ -161,10 +161,10 @@ object LostFilmAuth {
      */
     fun fetchCaptchaBitmap(client: OkHttpClient): android.graphics.Bitmap? {
         return try {
-            val url = "https://lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+            val url = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
             val req = Request.Builder()
                 .url(url)
-                .header("Referer", "https://lostfilm.tv/login/")
+                .header("Referer", "https://www.lostfilm.tv/login/")
                 .header("User-Agent", "Mozilla/5.0")
                 .build()
             val resp = client.newCall(req).execute()
@@ -203,17 +203,19 @@ object LostFilmAuth {
             }
 
             val request = Request.Builder()
-                .url("https://lostfilm.tv/ajaxik.users.php")
+                .url("https://www.lostfilm.tv/ajaxik.users.php")
                 .post(bodyBuilder.build())
-                .header("Referer", "https://lostfilm.tv/login/")
+                .header("Referer", "https://www.lostfilm.tv/login/")
                 .header("X-Requested-With", "XMLHttpRequest")
                 .build()
 
             Log.d(TAG, "POST login: mail=${email}, passLen=${password.length}, passStart=${password.take(2)}, captcha=${captcha}")
 
             val response = client.newCall(request).execute()
+            val setCookies = response.headers("Set-Cookie")
             val text = response.body?.string() ?: ""
             Log.d(TAG, "Login response ${response.code}: $text")
+            Log.d(TAG, "Login Set-Cookie: $setCookies")
 
             val json = JSONObject(text)
             when {
@@ -223,7 +225,7 @@ object LostFilmAuth {
                     LoginResult.Success
                 }
                 json.optBoolean("need_captcha") -> {
-                    val captchaUrl = "https://lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
+                    val captchaUrl = "https://www.lostfilm.tv/simple_captcha.php?${System.currentTimeMillis()}"
                     Log.d(TAG, "CAPTCHA required → $captchaUrl")
                     LoginResult.NeedCaptcha(captchaUrl)
                 }
