@@ -174,17 +174,21 @@ fun MainScreen(repository: LostFilmRepository) {
         val creds = LostFilmAuth.loadCredentials(context)
         savedEmail = creds?.first ?: ""; savedPass = creds?.second ?: ""
 
-        // 1. Try existing session cookies — load episodes directly
+        // 1. Try existing session cookies — check if truly authenticated
         if (cookieJar.hasSession()) {
-            statusMsg = "Загрузка..."
-            val eps = withContext(Dispatchers.IO) {
-                try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
+            statusMsg = "Проверка сессии..."
+            val authed = withContext(Dispatchers.IO) { LostFilmAuth.isAuthenticated(client) }
+            if (authed) {
+                statusMsg = "Загрузка..."
+                val eps = withContext(Dispatchers.IO) {
+                    try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
+                }
+                if (eps != null) {
+                    screen = Screen.Episodes(eps)
+                    return@LaunchedEffect
+                }
             }
-            if (eps != null) {
-                screen = Screen.Episodes(eps)
-                return@LaunchedEffect
-            }
-            Log.d(TAG, "Existing session expired, need fresh login")
+            Log.d(TAG, "Session expired or not authenticated, need fresh login")
         }
 
         // 2. Session dead → fresh login with captcha

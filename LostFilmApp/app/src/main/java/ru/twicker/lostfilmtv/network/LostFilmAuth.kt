@@ -134,6 +134,28 @@ object LostFilmAuth {
     }
 
     /**
+     * Quick auth check: GET /my — if it contains login form, session is dead.
+     * Must be called on IO dispatcher.
+     */
+    fun isAuthenticated(client: OkHttpClient): Boolean {
+        return try {
+            val req = Request.Builder()
+                .url("https://www.lostfilm.tv/my")
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            resp.close()
+            val authed = !body.contains("Войдите или зарегистрируйтесь") && !body.contains("ajaxik.users")
+            Log.d(TAG, "isAuthenticated: $authed (${resp.code}, ${body.length} chars)")
+            authed
+        } catch (e: Exception) {
+            Log.e(TAG, "isAuthenticated failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Fetch CAPTCHA image as Bitmap via OkHttp (same cookies as login).
      * Must be called on IO dispatcher.
      */

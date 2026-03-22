@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 
@@ -116,6 +117,8 @@ class LostFilmRepository {
             if (episodeCode.isBlank()) return@withContext TorrentsResult.Error("Код серии не найден")
             val url = "$BASE_URL/v_search.php?a=$episodeCode"
             Log.d(TAG, "Fetching torrents: $url")
+            val cookies = client.cookieJar.loadForRequest(url.toHttpUrl())
+            Log.d(TAG, "Torrent cookies: ${cookies.map { "${it.name}=${it.value.take(8)}@${it.domain}" }}")
             val request = Request.Builder().url(url).header("Referer", BASE_URL).build()
             val html = try {
                 client.newCall(request).execute().body?.string()
@@ -128,6 +131,7 @@ class LostFilmRepository {
                 Log.w(TAG, "getTorrents: not authenticated")
                 return@withContext TorrentsResult.NeedAuth
             }
+            Log.d(TAG, "v_search HTML (${html.length} chars): ${html.take(500)}")
             TorrentsResult.Success(parseTorrents(html))
         }
 
