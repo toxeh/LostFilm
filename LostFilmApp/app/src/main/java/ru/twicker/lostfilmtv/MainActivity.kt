@@ -171,7 +171,8 @@ fun MainScreen(repository: LostFilmRepository) {
         if (!ok) { screen = Screen.Error("ciadpi не запустился"); return@LaunchedEffect }
         val client = NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
 
-        // Establish PHPSESSID
+        // Clear stale cookies and establish fresh PHPSESSID
+        cookieJar.clearSession()
         withContext(Dispatchers.IO) { LostFilmAuth.initSession(client) }
 
         val creds = LostFilmAuth.loadCredentials(context)
@@ -179,33 +180,9 @@ fun MainScreen(repository: LostFilmRepository) {
         val pass = creds?.second ?: ""
         savedEmail = email; savedPass = pass
 
-        if (email.isBlank()) {
-            val bmp = loadCaptcha(client)
-            screen = Screen.Login(captchaBitmap = bmp)
-            return@LaunchedEffect
-        }
-
-        // Try login without captcha
-        statusMsg = "Авторизация..."
-        val loginRes = withContext(Dispatchers.IO) {
-            LostFilmAuth.login(context, client, email, pass, null)
-        }
-        when (loginRes) {
-            is LostFilmAuth.LoginResult.Success -> {
-                statusMsg = "Загрузка..."
-                val eps = withContext(Dispatchers.IO) {
-                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
-                }
-                screen = if (eps != null) Screen.Episodes(eps) else Screen.Error("Не удалось загрузить")
-            }
-            is LostFilmAuth.LoginResult.NeedCaptcha -> {
-                val bmp = loadCaptcha(client)
-                screen = Screen.Login(captchaBitmap = bmp)
-            }
-            is LostFilmAuth.LoginResult.Error -> {
-                screen = Screen.Login(error = "${loginRes.message}")
-            }
-        }
+        // Always show login screen with captcha — no priming POST
+        val bmp = loadCaptcha(client)
+        screen = Screen.Login(captchaBitmap = bmp)
     }
 
     // ── Torrent dialog ────────────────────────────────────────────────────────

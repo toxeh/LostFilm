@@ -47,6 +47,7 @@ object LostFilmAuth {
         fun hasSession(): Boolean = cookies.any { it.name == "lf_session" || it.name == "PHPSESSID" }
 
         fun clear() { cookies.clear(); persist() }
+        fun clearSession() { cookies.removeAll { it.name == "PHPSESSID" }; persist() }
 
         private fun persist() {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -126,7 +127,7 @@ object LostFilmAuth {
                 .build()
             val resp = client.newCall(req).execute()
             resp.body?.close()
-            Log.d(TAG, "initSession: ${resp.code}, cookies=${client.cookieJar.loadForRequest("https://www.lostfilm.tv/".toHttpUrl()).map { "${it.name}=${it.value.take(10)}" }}")
+            Log.d(TAG, "initSession: ${resp.code}")
         } catch (e: Exception) {
             Log.e(TAG, "initSession failed: ${e.message}")
         }
@@ -174,8 +175,10 @@ object LostFilmAuth {
                 .add("mail", email)
                 .add("pass", password)
                 .add("rem", "1")
-                .add("need_captcha", if (captcha != null) "1" else "")
-                .add("captcha", captcha ?: "")
+            if (captcha != null) {
+                bodyBuilder.add("need_captcha", "1")
+                bodyBuilder.add("captcha", captcha)
+            }
 
             val request = Request.Builder()
                 .url("https://www.lostfilm.tv/ajaxik.users.php")
@@ -183,6 +186,8 @@ object LostFilmAuth {
                 .header("Referer", "https://www.lostfilm.tv/login/")
                 .header("X-Requested-With", "XMLHttpRequest")
                 .build()
+
+            Log.d(TAG, "POST login: mail=${email}, passLen=${password.length}, passStart=${password.take(2)}, captcha=${captcha}")
 
             val response = client.newCall(request).execute()
             val text = response.body?.string() ?: ""
@@ -202,10 +207,11 @@ object LostFilmAuth {
                 }
                 json.has("error") -> {
                     val errVal = json.get("error")
-                    val msg = when (errVal) {
-                        is String -> errVal
-                        is Number -> if (errVal.toInt() == 1) "Неверный логин/пароль или каптча" else "Ошибка #$errVal"
-                        else -> errVal.toString()
+                    val msg = when {
+                        errVal is Number && errVal.toInt() == 1 -> "Неверный логин или пароль"
+                        errVal is Number && errVal.toInt() == 4 -> "Неверный код с картинки"
+                        errVal is String -> errVal
+                        else -> "Ошибка #$errVal"
                     }
                     LoginResult.Error(msg)
                 }
