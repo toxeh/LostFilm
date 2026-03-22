@@ -15,8 +15,16 @@ data class Episode(
     val episodeInfo: String,  // «4 сезон 3 серия»
     val date: String,         // «22.03.2026»
     val detailsUrl: String,
-    val imageUrl: String
+    val imageUrl: String,
+    val episodeCode: String   // «881-2-10» → used for /v_search.php?a=CODE
 )
+
+data class TorrentEntry(
+    val quality: String,   // «WEB-DLRip», «1080p WEB-DLRip», «720p WEB-DLRip»
+    val sizeMb: String,    // «1.05 ГБ»
+    val url: String        // «https://n.tracktor.site/td.php?s=...»
+)
+
 
 class LostFilmRepository {
     private val BASE_URL = "https://www.lostfilm.tv"
@@ -63,14 +71,17 @@ class LostFilmRepository {
             val href = link.attr("href").let {
                 if (it.startsWith("http")) it else "$BASE_URL$it"
             }
-            val nameRu   = row.selectFirst(".name-ru")?.text().orEmpty()
-            val nameEn   = row.selectFirst(".name-en")?.text().orEmpty()
-            val leftPart = row.selectFirst(".overlay .left-part")?.text().orEmpty()   // «4 сезон 3 серия»
-            val rightPart = row.selectFirst(".overlay .right-part")?.text().orEmpty() // «22.03.2026»
+            val nameRu    = row.selectFirst(".name-ru")?.text().orEmpty()
+            val nameEn    = row.selectFirst(".name-en")?.text().orEmpty()
+            val leftPart  = row.selectFirst(".overlay .left-part")?.text().orEmpty()
+            val rightPart = row.selectFirst(".overlay .right-part")?.text().orEmpty()
             val img = normalizeImageUrl(
                 row.selectFirst("img.thumb")?.attr("src")
                     ?: row.selectFirst("img")?.attr("src").orEmpty()
             )
+            // data-code="881-2-10" from markEpisodeAsWatched element, or derive from href
+            val code = row.selectFirst("[data-code]")?.attr("data-code")
+                ?: extractCodeFromUrl(href)
             if (nameRu.isBlank() && nameEn.isBlank()) continue
             episodes.add(Episode(
                 title       = nameRu.ifBlank { nameEn },
@@ -78,13 +89,89 @@ class LostFilmRepository {
                 episodeInfo = leftPart,
                 date        = rightPart,
                 detailsUrl  = href,
-                imageUrl    = img
+                imageUrl    = img,
+                episodeCode = code
             ))
         }
 
         Log.d(TAG, "Parsed ${episodes.size} episodes from .row elements")
         episodes
     }
+
+    /**
+     * Fetch torrent download options for an episode.
+     * URL: GET /v_search.php?a=CODE  (requires authenticated session via cookieJar)
+     *
+     * The page HTML structure (when logged in) looks like:
+     *   <div class="inner-box-episode">
+     *     <a href="https://n.tracktor.site/td.php?s=...">Земле... WEB-DLRip</a>
+     *     <div class="inner-box-desc">Видео: WEB-DLRip. Размер: 1.05 ГБ...</div>
+     *   </div>
+     *
+     * If not logged in, the page shows login form instead.
+     */
+    suspend fun getTorrents(client: OkHttpClient, episodeCode: String): List<TorrentEntry> =
+        withContext(Dispatchers.IO) {
+            if (episodeCode.isBlank()) return@withContext emptyList()
+            val url = "$BASE_URL/v_search.php?a=$episodeCode"
+            Log.d(TAG, "Fetching torrents: $url")
+            val request = Request.Builder().url(url)
+                .header("Referer", BASE_URL)
+                .build()
+            val html = try {
+                client.newCall(request).execute().body?.string() ?: return@withContext emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "getTorrents failed: ${e.message}")
+                return@withContext emptyList()
+            }
+            // Check if we got a login page instead
+            if (html.contains("Вход. – LostFilm") || html.contains("ajaxik.users")) {
+                Log.w(TAG, "getTorrents: not authenticated")
+                return@withContext emptyList<TorrentEntry>()
+                    .also { Log.w(TAG, "Need login for torrents") }
+            }
+            parseTorrents(html)
+        }
+
+    private fun parseTorrents(html: String): List<TorrentEntry> {
+        val doc = Jsoup.parse(html)
+        val result = mutableListOf<TorrentEntry>()
+
+        // Try primary structure: .inner-box--item or similar wrappers
+        // Each torrent block contains a link + description with size
+        for (link in doc.select("a[href*=tracktor], a[href*=td.php]")) {
+            val url    = link.attr("href")
+            val label  = link.text().trim()
+            // Size is usually nearby in a desc element or title attr
+            val desc   = link.parent()?.selectFirst(".desc, .inner-box--desc, .details")?.text()
+                ?: link.attr("title")
+                ?: ""
+            val size   = Regex("Размер[:\\s]+([\\d.,]+\\s*(?:ГБ|МБ|GB|MB))", RegexOption.IGNORE_CASE)
+                .find(desc)?.groupValues?.get(1) ?: ""
+            val quality = when {
+                "1080" in label -> "1080p"
+                "720"  in label -> "720p"
+                "480"  in label -> "480p"
+                else            -> "SD"
+            }
+            if (url.isNotBlank()) result.add(TorrentEntry(quality, size, url))
+        }
+
+        // Fallback: look for any tracktor links at all
+        if (result.isEmpty()) {
+            for (link in doc.select("a[href]")) {
+                val href = link.attr("href")
+                if ("tracktor" in href || "td.php" in href) {
+                    result.add(TorrentEntry(link.text().ifBlank { "Torrent" }, "", href))
+                }
+            }
+        }
+        Log.d(TAG, "Parsed ${result.size} torrent entries")
+        return result
+    }
+
+    /** Extract series code from URL like /series/Landman/season_2/episode_10/ → empty (code unknown from URL alone) */
+    private fun extractCodeFromUrl(url: String): String = ""
 
     /**
      * Normalize image URLs from lostfilm.tv.

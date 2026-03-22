@@ -246,9 +246,9 @@ object NetworkClient {
         return b.build()
     }
 
-    /** OkHttp client through ciadpi SOCKS5 proxy.
+    /** OkHttp client through ciadpi SOCKS5 proxy — authenticated via cookieJar.
      *  CiadpiSocketFactory resolves DNS via DoH and sends IP (not hostname) to ciadpi. */
-    fun createCiadpiClient(): OkHttpClient {
+    fun createCiadpiClient(cookieJar: okhttp3.CookieJar = okhttp3.CookieJar.NO_COOKIES): OkHttpClient {
         val sf = CiadpiSocketFactory(
             proxyHost = "127.0.0.1",
             proxyPort = CiadpiRunner.port,
@@ -257,6 +257,7 @@ object NetworkClient {
         return OkHttpClient.Builder()
             .socketFactory(sf)
             .dns(ipv4Dns)
+            .cookieJar(cookieJar)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", UA).build()) }
