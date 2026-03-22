@@ -33,6 +33,7 @@ import ru.twicker.lostfilmtv.network.LostFilmAuth
 import ru.twicker.lostfilmtv.network.LostFilmRepository
 import ru.twicker.lostfilmtv.network.NetworkClient
 import ru.twicker.lostfilmtv.network.TorrentEntry
+import ru.twicker.lostfilmtv.network.TorrentsResult
 
 private const val TAG = "MainActivity"
 
@@ -65,6 +66,14 @@ private sealed class Screen {
     data class Error(val message: String) : Screen()
 }
 
+private sealed class TorrentDialog {
+    object None : TorrentDialog()
+    object Loading : TorrentDialog()
+    data class Loaded(val episode: Episode, val entries: List<TorrentEntry>) : TorrentDialog()
+    data class NeedAuth(val episode: Episode) : TorrentDialog()
+    data class Err(val episode: Episode, val message: String) : TorrentDialog()
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,80 +83,77 @@ fun MainScreen(repository: LostFilmRepository) {
     var screen by remember { mutableStateOf<Screen>(Screen.Loading) }
     var statusMsg by remember { mutableStateOf("Запуск ciadpi...") }
     var activeClient by remember { mutableStateOf<okhttp3.OkHttpClient?>(null) }
-
-    // Torrent picker dialog state
-    var torrentEpisode by remember { mutableStateOf<Episode?>(null) }
-    var torrents by remember { mutableStateOf<List<TorrentEntry>>(emptyList()) }
-    var loadingTorrents by remember { mutableStateOf(false) }
-
+    var torrentDialog by remember { mutableStateOf<TorrentDialog>(TorrentDialog.None) }
     val scope = rememberCoroutineScope()
     val cookieJar = remember { LostFilmAuth.cookieJar(context) }
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+    suspend fun doLogin(email: String, pass: String) {
+        screen = Screen.Login(busy = true)
+        val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
+        val err = withContext(Dispatchers.IO) { LostFilmAuth.login(context, client, email, pass) }
+        if (err != null) { screen = Screen.Login(error = err); return }
+        statusMsg = "Загрузка..."
+        val eps = withContext(Dispatchers.IO) {
+            try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
+        }
+        screen = if (eps != null) Screen.Episodes(eps)
+                 else Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
+    }
 
     // ── Startup ──────────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
         val ok = withContext(Dispatchers.IO) { CiadpiRunner.start(context) }
         if (!ok) { screen = Screen.Error("ciadpi не запустился"); return@LaunchedEffect }
 
-        val jar = LostFilmAuth.cookieJar(context)
-        val client = NetworkClient.createCiadpiClient(jar)
-        activeClient = client
+        val client = NetworkClient.createCiadpiClient(cookieJar).also { activeClient = it }
 
-        // Try loading with saved session
+        // If no saved credentials → show login immediately
+        val creds = LostFilmAuth.loadCredentials(context)
+        if (creds == null) {
+            screen = Screen.Login(); return@LaunchedEffect
+        }
+
+        // Auto-login with saved credentials
+        statusMsg = "Авторизация..."
+        val loginErr = withContext(Dispatchers.IO) { LostFilmAuth.login(context, client, creds.first, creds.second) }
+        if (loginErr != null) {
+            screen = Screen.Login(error = "Сохранённый логин не работает: $loginErr"); return@LaunchedEffect
+        }
+
         statusMsg = "Загрузка..."
-        val episodes = withContext(Dispatchers.IO) {
+        val eps = withContext(Dispatchers.IO) {
             try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
         }
-
-        if (episodes != null) {
-            screen = Screen.Episodes(episodes)
-        } else {
-            // Check saved credentials
-            val creds = LostFilmAuth.loadCredentials(context)
-            if (creds != null) {
-                statusMsg = "Авторизация..."
-                val err = withContext(Dispatchers.IO) {
-                    LostFilmAuth.login(context, client, creds.first, creds.second)
-                }
-                if (err == null) {
-                    val eps = withContext(Dispatchers.IO) {
-                        try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
-                    }
-                    screen = if (eps != null) Screen.Episodes(eps) else Screen.Login()
-                } else {
-                    screen = Screen.Login(error = "Сохранённый логин не работает")
-                }
-            } else {
-                screen = Screen.Login()
-            }
-        }
+        screen = if (eps != null) Screen.Episodes(eps) else Screen.Error("Не удалось загрузить список")
     }
 
-    // ── Torrent picker dialog ─────────────────────────────────────────────────
-    torrentEpisode?.let { ep ->
-        AlertDialog(
-            onDismissRequest = { torrentEpisode = null; torrents = emptyList() },
-            title = { Text(ep.title) },
+    // ── Torrent dialog ────────────────────────────────────────────────────────
+    when (val td = torrentDialog) {
+        is TorrentDialog.None -> {}
+
+        is TorrentDialog.Loading -> AlertDialog(
+            onDismissRequest = { torrentDialog = TorrentDialog.None },
+            title = { Text("Загрузка торрентов...") },
+            text = { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } },
+            confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Отмена") } }
+        )
+
+        is TorrentDialog.Loaded -> AlertDialog(
+            onDismissRequest = { torrentDialog = TorrentDialog.None },
+            title = { Text(td.episode.title) },
             text = {
-                if (loadingTorrents) {
-                    Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                } else if (torrents.isEmpty()) {
-                    Text("Торренты не найдены.\nВозможно, требуется авторизация.")
+                if (td.entries.isEmpty()) {
+                    Text("Торренты не найдены для этого эпизода.")
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(torrents) { t ->
-                            OutlinedCard(
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    torrentEpisode = null
-                                    torrents = emptyList()
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(t.url))
-                                    context.startActivity(intent)
-                                }
-                            ) {
+                        items(td.entries) { t ->
+                            OutlinedCard(modifier = Modifier.fillMaxWidth().clickable {
+                                torrentDialog = TorrentDialog.None
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url)))
+                            }) {
                                 Column(Modifier.padding(12.dp)) {
-                                    Text(t.quality, style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold)
+                                    Text(t.quality, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                                     if (t.sizeMb.isNotBlank()) {
                                         Text(t.sizeMb, style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -158,9 +164,29 @@ fun MainScreen(repository: LostFilmRepository) {
                     }
                 }
             },
+            confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Закрыть") } }
+        )
+
+        is TorrentDialog.NeedAuth -> AlertDialog(
+            onDismissRequest = { torrentDialog = TorrentDialog.None },
+            title = { Text("Требуется авторизация") },
+            text = { Text("Для скачивания торрентов нужно войти в LostFilm.TV.") },
             confirmButton = {
-                TextButton(onClick = { torrentEpisode = null; torrents = emptyList() }) { Text("Закрыть") }
+                Button(onClick = {
+                    torrentDialog = TorrentDialog.None
+                    screen = Screen.Login()
+                }) { Text("Войти") }
+            },
+            dismissButton = {
+                TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("Закрыть") }
             }
+        )
+
+        is TorrentDialog.Err -> AlertDialog(
+            onDismissRequest = { torrentDialog = TorrentDialog.None },
+            title = { Text("Ошибка") },
+            text = { Text(td.message) },
+            confirmButton = { TextButton(onClick = { torrentDialog = TorrentDialog.None }) { Text("OK") } }
         )
     }
 
@@ -188,6 +214,7 @@ fun MainScreen(repository: LostFilmRepository) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (val s = screen) {
+
                 is Screen.Loading -> Column(
                     Modifier.align(Alignment.Center),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -198,27 +225,8 @@ fun MainScreen(repository: LostFilmRepository) {
                 }
 
                 is Screen.Login -> LoginPanel(
-                    error = s.error,
-                    busy = s.busy,
-                    onLogin = { email, pass ->
-                        screen = Screen.Login(busy = true)
-                        scope.launch {
-                            val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar)
-                                .also { activeClient = it }
-                            val err = withContext(Dispatchers.IO) {
-                                LostFilmAuth.login(context, client, email, pass)
-                            }
-                            if (err != null) {
-                                screen = Screen.Login(error = err)
-                            } else {
-                                val eps = withContext(Dispatchers.IO) {
-                                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
-                                }
-                                screen = if (eps != null) Screen.Episodes(eps)
-                                else Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
-                            }
-                        }
-                    }
+                    error = s.error, busy = s.busy,
+                    onLogin = { email, pass -> scope.launch { doLogin(email, pass) } }
                 )
 
                 is Screen.Episodes -> {
@@ -230,17 +238,19 @@ fun MainScreen(repository: LostFilmRepository) {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         items(s.list) { ep ->
-                            EpisodeCard(ep, imgLoader, onClick = {
-                                torrentEpisode = ep
-                                loadingTorrents = true
-                                torrents = emptyList()
+                            EpisodeCard(ep, imgLoader) {
+                                torrentDialog = TorrentDialog.Loading
                                 scope.launch {
-                                    torrents = withContext(Dispatchers.IO) {
+                                    val result = withContext(Dispatchers.IO) {
                                         repository.getTorrents(client, ep.episodeCode)
                                     }
-                                    loadingTorrents = false
+                                    torrentDialog = when (result) {
+                                        is TorrentsResult.Success  -> TorrentDialog.Loaded(ep, result.entries)
+                                        is TorrentsResult.NeedAuth -> TorrentDialog.NeedAuth(ep)
+                                        is TorrentsResult.Error    -> TorrentDialog.Err(ep, result.message)
+                                    }
                                 }
-                            })
+                            }
                         }
                     }
                 }
@@ -249,8 +259,7 @@ fun MainScreen(repository: LostFilmRepository) {
                     Modifier.align(Alignment.Center).padding(32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Ошибка", style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.error)
+                    Text("Ошибка", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(8.dp))
                     Text(s.message, style = MaterialTheme.typography.bodySmall)
                 }
@@ -275,8 +284,7 @@ fun LoginPanel(error: String?, busy: Boolean, onLogin: (String, String) -> Unit)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             value = email, onValueChange = { email = it },
-            label = { Text("Email") },
-            singleLine = true,
+            label = { Text("Email") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             enabled = !busy
@@ -284,8 +292,7 @@ fun LoginPanel(error: String?, busy: Boolean, onLogin: (String, String) -> Unit)
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = pass, onValueChange = { pass = it },
-            label = { Text("Пароль") },
-            singleLine = true,
+            label = { Text("Пароль") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -293,8 +300,7 @@ fun LoginPanel(error: String?, busy: Boolean, onLogin: (String, String) -> Unit)
         )
         if (error != null) {
             Spacer(Modifier.height(8.dp))
-            Text(error, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error)
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(20.dp))
         Button(

@@ -25,6 +25,13 @@ data class TorrentEntry(
     val url: String        // «https://n.tracktor.site/td.php?s=...»
 )
 
+sealed class TorrentsResult {
+    data class Success(val entries: List<TorrentEntry>) : TorrentsResult()
+    object NeedAuth : TorrentsResult()
+    data class Error(val message: String) : TorrentsResult()
+}
+
+
 
 class LostFilmRepository {
     private val BASE_URL = "https://www.lostfilm.tv"
@@ -99,38 +106,29 @@ class LostFilmRepository {
     }
 
     /**
-     * Fetch torrent download options for an episode.
-     * URL: GET /v_search.php?a=CODE  (requires authenticated session via cookieJar)
-     *
-     * The page HTML structure (when logged in) looks like:
-     *   <div class="inner-box-episode">
-     *     <a href="https://n.tracktor.site/td.php?s=...">Земле... WEB-DLRip</a>
-     *     <div class="inner-box-desc">Видео: WEB-DLRip. Размер: 1.05 ГБ...</div>
-     *   </div>
-     *
-     * If not logged in, the page shows login form instead.
+     * Fetch torrent options. Returns:
+     *   TorrentsResult.Success — list (may be empty if no rows parsed)
+     *   TorrentsResult.NeedAuth — server returned a login page
+     *   TorrentsResult.Error — network/other failure
      */
-    suspend fun getTorrents(client: OkHttpClient, episodeCode: String): List<TorrentEntry> =
+    suspend fun getTorrents(client: OkHttpClient, episodeCode: String): TorrentsResult =
         withContext(Dispatchers.IO) {
-            if (episodeCode.isBlank()) return@withContext emptyList()
+            if (episodeCode.isBlank()) return@withContext TorrentsResult.Error("Код серии не найден")
             val url = "$BASE_URL/v_search.php?a=$episodeCode"
             Log.d(TAG, "Fetching torrents: $url")
-            val request = Request.Builder().url(url)
-                .header("Referer", BASE_URL)
-                .build()
+            val request = Request.Builder().url(url).header("Referer", BASE_URL).build()
             val html = try {
-                client.newCall(request).execute().body?.string() ?: return@withContext emptyList()
+                client.newCall(request).execute().body?.string()
+                    ?: return@withContext TorrentsResult.Error("Пустой ответ")
             } catch (e: Exception) {
                 Log.e(TAG, "getTorrents failed: ${e.message}")
-                return@withContext emptyList()
+                return@withContext TorrentsResult.Error(e.message ?: "Ошибка сети")
             }
-            // Check if we got a login page instead
             if (html.contains("Вход. – LostFilm") || html.contains("ajaxik.users")) {
                 Log.w(TAG, "getTorrents: not authenticated")
-                return@withContext emptyList<TorrentEntry>()
-                    .also { Log.w(TAG, "Need login for torrents") }
+                return@withContext TorrentsResult.NeedAuth
             }
-            parseTorrents(html)
+            TorrentsResult.Success(parseTorrents(html))
         }
 
     private fun parseTorrents(html: String): List<TorrentEntry> {
@@ -182,16 +180,13 @@ class LostFilmRepository {
      */
     private fun normalizeImageUrl(raw: String): String {
         if (raw.isBlank()) return ""
+        val CDN = "https://static.lostfilm.top"
         return when {
-            // Protocol-relative with wrong host like "//static/Images"
-            raw.startsWith("//static/") -> "https://static.lostfilm.tv/" + raw.removePrefix("//static/")
-            // Protocol-relative with full host like "//static.lostfilm.tv/..."
-            raw.startsWith("//") -> "https:$raw"
-            // Root-relative
-            raw.startsWith("/") -> "https://static.lostfilm.tv$raw"
-            // Already absolute
-            raw.startsWith("http") -> raw
-            else -> raw
+            raw.startsWith("//static/")  -> "$CDN/" + raw.removePrefix("//static/")
+            raw.startsWith("//")         -> "https:$raw"
+            raw.startsWith("/")          -> "$CDN$raw"
+            raw.startsWith("http")       -> raw
+            else                         -> raw
         }
     }
 }
