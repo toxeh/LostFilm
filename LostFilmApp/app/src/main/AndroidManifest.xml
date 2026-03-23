@@ -13,14 +13,14 @@
         android:banner="@drawable/banner"
         android:label="LostFilm"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.NoActionBar"
+        android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"
         android:extractNativeLibs="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:banner="@drawable/banner"
-            android:theme="@style/Theme.AppCompat.NoActionBar">
+            android:theme="@style/AppTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

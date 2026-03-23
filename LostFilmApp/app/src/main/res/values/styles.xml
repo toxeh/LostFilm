@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.Leanback">
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorPrimary">#222538</item>
+        <item name="android:colorPrimaryDark">#14181C</item>
+        <item name="android:colorAccent">#C52400</item>
+    </style>
+</resources>
