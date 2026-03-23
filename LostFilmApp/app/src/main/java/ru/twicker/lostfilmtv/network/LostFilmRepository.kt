@@ -125,8 +125,7 @@ class LostFilmRepository {
             
             val url = "$BASE_URL/v_search.php?a=$vsearchCode"
             Log.d(TAG, "Fetching torrents: $url (from $episodeCode)")
-            val cookies = client.cookieJar.loadForRequest(url.toHttpUrl())
-            Log.d(TAG, "Torrent cookies: ${cookies.map { "${it.name}=${it.value.take(8)}@${it.domain}" }}")
+            
             val request = Request.Builder()
                 .url(url)
                 .header("Referer", "$BASE_URL/")
@@ -142,12 +141,46 @@ class LostFilmRepository {
                 Log.e(TAG, "getTorrents failed: ${e.message}")
                 return@withContext TorrentsResult.Error(e.message ?: "Ошибка сети")
             }
-            // JS redirect = not authenticated
-            if (html.contains("location.replace") || html.contains("Войдите или зарегистрируйтесь")) {
-                Log.w(TAG, "getTorrents: not authenticated (JS redirect)")
+            
+            Log.d(TAG, "v_search HTML (${html.length} chars): ${html.take(500)}")
+            
+            // Check for actual login page (not JS redirect)
+            if (html.contains("Войдите или зарегистрируйтесь")) {
+                Log.w(TAG, "getTorrents: login page returned")
                 return@withContext TorrentsResult.NeedAuth
             }
-            Log.d(TAG, "v_search HTML (${html.length} chars): ${html.take(500)}")
+            
+            // v_search.php normally returns JS redirect: location.replace('/V/...')
+            // This is the NORMAL flow — extract URL and follow it
+            val redirectUrl = Regex("""location\.replace\(['"](.+?)['"]\)""")
+                .find(html)?.groupValues?.get(1)
+            
+            if (redirectUrl != null) {
+                val fullUrl = if (redirectUrl.startsWith("http")) redirectUrl
+                              else "$BASE_URL$redirectUrl"
+                Log.d(TAG, "Following JS redirect to: $fullUrl")
+                
+                val redirectReq = Request.Builder()
+                    .url(fullUrl)
+                    .header("Referer", url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml")
+                    .build()
+                val redirectHtml = try {
+                    val resp2 = client.newCall(redirectReq).execute()
+                    Log.d(TAG, "Redirect response: ${resp2.code}, url=${resp2.request.url}")
+                    resp2.body?.string()
+                        ?: return@withContext TorrentsResult.Error("Пустой ответ после редиректа")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Redirect failed: ${e.message}")
+                    return@withContext TorrentsResult.Error(e.message ?: "Ошибка сети")
+                }
+                
+                Log.d(TAG, "Redirect HTML (${redirectHtml.length} chars): ${redirectHtml.take(500)}")
+                return@withContext TorrentsResult.Success(parseTorrents(redirectHtml))
+            }
+            
+            // No redirect — might be direct torrent page
             TorrentsResult.Success(parseTorrents(html))
         }
 
