@@ -176,7 +176,7 @@ class LostFilmRepository {
                     return@withContext TorrentsResult.Error(e.message ?: "Ошибка сети")
                 }
                 
-                Log.d(TAG, "Redirect HTML (${redirectHtml.length} chars): ${redirectHtml.take(500)}")
+                Log.d(TAG, "Redirect HTML (${redirectHtml.length} chars): ${redirectHtml.take(3000)}")
                 return@withContext TorrentsResult.Success(parseTorrents(redirectHtml))
             }
             
@@ -188,36 +188,50 @@ class LostFilmRepository {
         val doc = Jsoup.parse(html)
         val result = mutableListOf<TorrentEntry>()
 
-        // Try primary structure: .inner-box--item or similar wrappers
-        // Each torrent block contains a link + description with size
-        for (link in doc.select("a[href*=tracktor], a[href*=td.php]")) {
-            val url    = link.attr("href")
-            val label  = link.text().trim()
-            // Size is usually nearby in a desc element or title attr
-            val desc   = link.parent()?.selectFirst(".desc, .inner-box--desc, .details")?.text()
-                ?: link.attr("title")
-                ?: ""
-            val size   = Regex("Размер[:\\s]+([\\d.,]+\\s*(?:ГБ|МБ|GB|MB))", RegexOption.IGNORE_CASE)
-                .find(desc)?.groupValues?.get(1) ?: ""
+        // Primary: parse .inner-box--item blocks (LostFilm /V/ page structure)
+        for (item in doc.select(".inner-box--item")) {
+            val link = item.selectFirst(".inner-box--link a[href]") ?: continue
+            val url = link.attr("href")
+            if (url.isBlank()) continue
+            
+            val subtitle = item.selectFirst(".inner-box--subtitle")?.text()?.trim() ?: ""
+            val desc = item.selectFirst(".inner-box--desc")?.text()?.trim() ?: ""
+            
             val quality = when {
-                "1080" in label -> "1080p"
-                "720"  in label -> "720p"
-                "480"  in label -> "480p"
-                else            -> "SD"
+                "1080" in subtitle -> "1080p"
+                "720" in subtitle  -> "720p"
+                "480" in subtitle  -> "480p"
+                "MP4" in subtitle  -> "SD"
+                "1080" in desc     -> "1080p"
+                "720" in desc      -> "720p"
+                else               -> subtitle.ifBlank { "SD" }
             }
-            if (url.isNotBlank()) result.add(TorrentEntry(quality, size, url))
+            
+            val size = Regex("""(\d[\d.,]+\s*(?:ГБ|МБ|GB|MB))""", RegexOption.IGNORE_CASE)
+                .find(desc)?.groupValues?.get(1) ?: ""
+            
+            result.add(TorrentEntry(quality, size, url))
         }
 
-        // Fallback: look for any tracktor links at all
+        // Fallback: unique td.php/tracktor links
         if (result.isEmpty()) {
-            for (link in doc.select("a[href]")) {
-                val href = link.attr("href")
-                if ("tracktor" in href || "td.php" in href) {
-                    result.add(TorrentEntry(link.text().ifBlank { "Torrent" }, "", href))
+            val seen = mutableSetOf<String>()
+            for (link in doc.select("a[href*=tracktor], a[href*=td.php]")) {
+                val url = link.attr("href")
+                if (url.isBlank() || url in seen) continue
+                seen.add(url)
+                val ctx = link.parent()?.text() ?: link.text()
+                val quality = when {
+                    "1080" in ctx -> "1080p"
+                    "720" in ctx  -> "720p"
+                    "480" in ctx  -> "480p"
+                    else          -> link.text().ifBlank { "Torrent" }
                 }
+                result.add(TorrentEntry(quality, "", url))
             }
         }
-        Log.d(TAG, "Parsed ${result.size} torrent entries")
+        
+        Log.d(TAG, "Parsed ${result.size} torrent entries: ${result.map { "${it.quality} ${it.sizeMb}" }}")
         return result
     }
 
