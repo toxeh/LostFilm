@@ -114,7 +114,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
     private fun onEpisodeClicked(episode: Episode) {
         val detailFragment = EpisodeDetailsFragment.newInstance(episode)
         requireActivity().supportFragmentManager.beginTransaction()
-            .replace(R.id.main_browse_fragment, detailFragment)
+            .replace(R.id.browse_container, detailFragment)
             .addToBackStack(null)
             .commitAllowingStateLoss()
     }

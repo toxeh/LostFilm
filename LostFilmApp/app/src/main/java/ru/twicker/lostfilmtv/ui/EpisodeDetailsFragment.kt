@@ -118,7 +118,7 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
                     }
                 })
                 .build()
-            Coil.imageLoader(requireContext()).enqueue(request)
+            ru.twicker.lostfilmtv.network.CoilFactory.get(requireContext()).enqueue(request)
         }
 
         // Initial action: "Смотреть"

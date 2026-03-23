@@ -47,11 +47,11 @@ class EpisodeCardPresenter(
         }
         card.setMainImageDimensions(CARD_WIDTH, CARD_HEIGHT)
 
-        // Load poster via Coil
+        // Load poster via Coil with ciadpi proxy
         val imageUrl = episode.imageUrl
         if (imageUrl.isNotEmpty()) {
             val imageView = card.mainImageView ?: return
-            val loader = Coil.imageLoader(imageView.context)
+            val loader = ru.twicker.lostfilmtv.network.CoilFactory.get(imageView.context)
             loader.enqueue(
                 ImageRequest.Builder(imageView.context)
                     .data(imageUrl)
