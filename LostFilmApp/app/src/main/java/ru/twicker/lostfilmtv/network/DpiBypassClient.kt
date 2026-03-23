@@ -258,6 +258,7 @@ object NetworkClient {
             .socketFactory(sf)
             .dns(ipv4Dns)
             .cookieJar(cookieJar)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1)) // H2 breaks through ciadpi proxy
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", UA).build()) }

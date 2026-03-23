@@ -75,14 +75,17 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
     }
 
     fun showBrowseFragment() {
-        // Replace Compose content with Leanback Fragment
-        val container = android.widget.FrameLayout(this).apply {
-            id = android.R.id.content
+        Log.d(TAG, "showBrowseFragment() called, thread=${Thread.currentThread().name}")
+        runOnUiThread {
+            val container = android.widget.FrameLayout(this).apply {
+                id = android.R.id.content
+            }
+            setContentView(container)
+            supportFragmentManager.beginTransaction()
+                .replace(android.R.id.content, ru.twicker.lostfilmtv.ui.MainBrowseFragment())
+                .commitAllowingStateLoss()
+            Log.d(TAG, "MainBrowseFragment committed")
         }
-        setContentView(container)
-        supportFragmentManager.beginTransaction()
-            .replace(android.R.id.content, ru.twicker.lostfilmtv.ui.MainBrowseFragment())
-            .commit()
     }
 }
 
@@ -132,6 +135,7 @@ private sealed class TorrentDialog {
 @Composable
 fun MainScreen(repository: LostFilmRepository) {
     val context = LocalContext.current
+    val activity = context as MainActivity
     var screen by remember { mutableStateOf<Screen>(Screen.Loading) }
     var statusMsg by remember { mutableStateOf("Запуск ciadpi...") }
     var activeClient by remember { mutableStateOf<okhttp3.OkHttpClient?>(null) }
@@ -164,7 +168,7 @@ fun MainScreen(repository: LostFilmRepository) {
                 val eps = withContext(Dispatchers.IO) {
                     try { repository.getRecentEpisodes(client) } catch (e: Exception) { null }
                 }
-                if (eps != null) { (context as? MainActivity)?.showBrowseFragment(); return@doLogin }
+                if (eps != null) { activity.showBrowseFragment(); return@doLogin }
                 else screen = Screen.Login(error = "Авторизация прошла, но загрузка не удалась")
             }
             is LostFilmAuth.LoginResult.NeedCaptcha -> {
@@ -198,9 +202,10 @@ fun MainScreen(repository: LostFilmRepository) {
             if (authed) {
                 statusMsg = "Загрузка..."
                 val eps = withContext(Dispatchers.IO) {
-                    try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
+                    try { repository.getRecentEpisodes(client) } catch (e: Exception) { Log.e(TAG, "getRecentEpisodes failed", e); null }
                 }
-                if (eps != null) { (context as? MainActivity)?.showBrowseFragment(); return@LaunchedEffect }
+                Log.d(TAG, "Episodes loaded: ${eps?.size ?: "null"}")
+                if (eps != null) { Log.d(TAG, "Calling showBrowseFragment"); activity.showBrowseFragment(); return@LaunchedEffect }
                 else { screen = Screen.Error("Авторизован, но не удалось загрузить список"); return@LaunchedEffect }
                 return@LaunchedEffect
             }
@@ -312,7 +317,7 @@ fun MainScreen(repository: LostFilmRepository) {
                             val eps = withContext(Dispatchers.IO) {
                                 try { repository.getRecentEpisodes(client) } catch (_: Exception) { null }
                             }
-                            if (eps != null) (context as? MainActivity)?.showBrowseFragment()
+                            if (eps != null) activity.showBrowseFragment()
                             else screen = Screen.Error("Не удалось загрузить")
                         }},
                         colors = ButtonDefaults.buttonColors(containerColor = LF_Red)
