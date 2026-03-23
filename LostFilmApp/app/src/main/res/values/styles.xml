@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Single theme: Theme.Leanback — used everywhere (no Compose anymore) -->
     <style name="AppTheme" parent="Theme.Leanback">
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:windowBackground">@android:color/black</item>
