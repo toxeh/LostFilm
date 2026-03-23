@@ -164,20 +164,55 @@ class MainBrowseFragment : BrowseSupportFragment() {
     }
 
     private fun showTorrentDialog(episode: Episode, entries: List<TorrentEntry>) {
-        val titles = entries.map { it.quality }.toTypedArray()
+        val titles = entries.map { "${it.quality}  ${it.sizeMb}" }.toTypedArray()
         android.app.AlertDialog.Builder(requireContext())
             .setTitle(episode.title)
             .setItems(titles) { _, which ->
                 val entry = entries[which]
-                try {
-                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(entry.url))
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(requireContext(), "Не удалось открыть: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
+                downloadAndOpenTorrent(entry)
             }
             .setNegativeButton("Отмена", null)
             .show()
+    }
+
+    private fun downloadAndOpenTorrent(entry: TorrentEntry) {
+        val c = client ?: return
+        Toast.makeText(requireContext(), "Скачивание торрента...", Toast.LENGTH_SHORT).show()
+
+        lifecycleScope.launch {
+            try {
+                val torrentBytes = withContext(Dispatchers.IO) {
+                    val req = okhttp3.Request.Builder()
+                        .url(entry.url)
+                        .header("User-Agent", "Mozilla/5.0")
+                        .build()
+                    c.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                        resp.body?.bytes() ?: throw Exception("Empty body")
+                    }
+                }
+                
+                // Save to cache dir
+                val file = java.io.File(requireContext().cacheDir, "download.torrent")
+                file.writeBytes(torrentBytes)
+                
+                // Open via FileProvider
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    requireContext(),
+                    "${requireContext().packageName}.fileprovider",
+                    file
+                )
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/x-bittorrent")
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                
+            } catch (e: Exception) {
+                Log.e("MainBrowse", "Download torrent failed: ${e.message}", e)
+                Toast.makeText(requireContext(), "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 }
