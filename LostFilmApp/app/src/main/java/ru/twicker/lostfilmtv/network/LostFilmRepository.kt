@@ -116,20 +116,35 @@ class LostFilmRepository {
     suspend fun getTorrents(client: OkHttpClient, episodeCode: String): TorrentsResult =
         withContext(Dispatchers.IO) {
             if (episodeCode.isBlank()) return@withContext TorrentsResult.Error("Код серии не найден")
-            val url = "$BASE_URL/v_search.php?a=$episodeCode"
-            Log.d(TAG, "Fetching torrents: $url")
+
+            // Convert code: "972-2-11" → "972002011" (showId + 3-digit season + 3-digit episode)
+            val parts = episodeCode.split("-")
+            val vsearchCode = if (parts.size == 3) {
+                "${parts[0]}${parts[1].padStart(3, '0')}${parts[2].padStart(3, '0')}"
+            } else episodeCode
+            
+            val url = "$BASE_URL/v_search.php?a=$vsearchCode"
+            Log.d(TAG, "Fetching torrents: $url (from $episodeCode)")
             val cookies = client.cookieJar.loadForRequest(url.toHttpUrl())
             Log.d(TAG, "Torrent cookies: ${cookies.map { "${it.name}=${it.value.take(8)}@${it.domain}" }}")
-            val request = Request.Builder().url(url).header("Referer", BASE_URL).build()
+            val request = Request.Builder()
+                .url(url)
+                .header("Referer", "$BASE_URL/")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .header("Accept", "text/html,application/xhtml+xml")
+                .build()
             val html = try {
-                client.newCall(request).execute().body?.string()
+                val resp = client.newCall(request).execute()
+                Log.d(TAG, "v_search response: ${resp.code}, url=${resp.request.url}")
+                resp.body?.string()
                     ?: return@withContext TorrentsResult.Error("Пустой ответ")
             } catch (e: Exception) {
                 Log.e(TAG, "getTorrents failed: ${e.message}")
                 return@withContext TorrentsResult.Error(e.message ?: "Ошибка сети")
             }
-            if (html.contains("Вход. – LostFilm") || html.contains("ajaxik.users")) {
-                Log.w(TAG, "getTorrents: not authenticated")
+            // JS redirect = not authenticated
+            if (html.contains("location.replace") || html.contains("Войдите или зарегистрируйтесь")) {
+                Log.w(TAG, "getTorrents: not authenticated (JS redirect)")
                 return@withContext TorrentsResult.NeedAuth
             }
             Log.d(TAG, "v_search HTML (${html.length} chars): ${html.take(500)}")

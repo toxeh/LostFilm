@@ -10,6 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -285,15 +288,12 @@ fun MainScreen(repository: LostFilmRepository) {
                 is Screen.Episodes -> {
                     val client = activeClient ?: NetworkClient.createCiadpiClient(cookieJar)
                     val imgLoader = ImageLoader.Builder(context).okHttpClient(client).build()
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 160.dp),
+                    LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        items(s.list.size) { i ->
-                            val ep = s.list[i]
+                        items(s.list) { ep ->
                             EpisodeCard(ep, imgLoader) {
                                 torrentDialog = TorrentDialog.Loading
                                 scope.launch {
@@ -430,27 +430,33 @@ fun LoginPanel(
 fun EpisodeCard(episode: Episode, imageLoader: ImageLoader, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(10.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
         colors = CardDefaults.cardColors(containerColor = LF_SurfaceVar)
     ) {
-        Column {
-            if (episode.imageUrl.isNotEmpty()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current).data(episode.imageUrl).crossfade(true).build(),
-                    imageLoader = imageLoader,
-                    contentDescription = episode.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(220.dp)
-                )
-            } else Box(Modifier.fillMaxWidth().height(220.dp).background(LF_Surface))
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(episode.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = LF_TextPrimary, maxLines = 2)
-                if (episode.titleEn.isNotEmpty()) Text(episode.titleEn, style = MaterialTheme.typography.bodySmall, color = LF_TextSecondary, maxLines = 1)
-                if (episode.episodeInfo.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(episode.episodeInfo, style = MaterialTheme.typography.bodySmall, color = LF_RedLight)
+        Row(Modifier.height(150.dp)) {
+            // Poster 115x150dp — matches mobile_episode_card.xml
+            Box(Modifier.width(115.dp).fillMaxHeight().padding(10.dp)) {
+                if (episode.imageUrl.isNotEmpty()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current).data(episode.imageUrl).crossfade(true).build(),
+                        imageLoader = imageLoader,
+                        contentDescription = episode.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
-                if (episode.date.isNotEmpty()) Text(episode.date, style = MaterialTheme.typography.labelSmall, color = LF_TextSecondary)
+            }
+            // Text area
+            Box(Modifier.weight(1f).fillMaxHeight().padding(top = 20.dp, bottom = 20.dp, start = 10.dp, end = 60.dp)) {
+                Column {
+                    Text(episode.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp), fontWeight = FontWeight.Bold, color = LF_TextPrimary, maxLines = 2)
+                    if (episode.titleEn.isNotEmpty()) Text(episode.titleEn, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 17.sp), color = LF_TextSecondary, maxLines = 1)
+                    if (episode.episodeInfo.isNotEmpty()) Text(episode.episodeInfo, style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, fontStyle = FontStyle.Italic), color = LF_TextSecondary)
+                }
+                if (episode.date.isNotEmpty()) {
+                    Text(episode.date, style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold), color = LF_TextSecondary, modifier = Modifier.align(Alignment.BottomStart))
+                }
             }
         }
     }
