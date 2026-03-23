@@ -10,6 +10,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.twicker.lostfilmtv.R
 import ru.twicker.lostfilmtv.network.*
 
 /**
@@ -22,40 +23,40 @@ class MainBrowseFragment : BrowseSupportFragment() {
         private const val TAG = "MainBrowse"
     }
 
+
     private var client: okhttp3.OkHttpClient? = null
     private val repository = LostFilmRepository()
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+        super.onActivityCreated(savedInstanceState)
+        Log.d(TAG, "onActivityCreated")
+
+        title = "LostFilm TV"
+        headersState = HEADERS_DISABLED
+        isHeadersTransitionOnBackEnabled = false
+        brandColor = android.graphics.Color.parseColor("#222538")
 
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
         client = NetworkClient.createCiadpiClient(cookieJar)
 
-        setupAdapter()
-        setupListeners()
-        loadEpisodes()
-    }
-
-    private fun setupAdapter() {
-        title = "LostFilm TV"
-        headersState = HEADERS_DISABLED
-    }
-
-    private fun setupListeners() {
         onItemViewClickedListener = OnItemViewClickedListener { _, item, _, _ ->
             if (item is Episode) {
                 onEpisodeClicked(item)
             }
         }
+
+        loadEpisodes()
     }
 
     private fun loadEpisodes() {
         val c = client ?: return
+        Log.d(TAG, "loadEpisodes starting")
         lifecycleScope.launch {
             try {
                 val episodes = withContext(Dispatchers.IO) {
                     repository.getRecentEpisodes(c)
                 }
+                Log.d(TAG, "loadEpisodes got ${episodes.size} episodes")
                 if (episodes.isEmpty()) {
                     showError("Нет новых эпизодов")
                     return@launch
@@ -69,6 +70,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
     }
 
     private fun setupRows(episodes: List<Episode>) {
+        Log.d(TAG, "setupRows with ${episodes.size} episodes")
         val browseAdapter = ArrayObjectAdapter(ListRowPresenter())
 
         val episodePresenter = EpisodeCardPresenter()
@@ -93,6 +95,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
         }
 
         adapter = browseAdapter
+        Log.d(TAG, "adapter set with ${browseAdapter.size()} rows")
     }
 
     private fun showError(msg: String) {
@@ -100,7 +103,6 @@ class MainBrowseFragment : BrowseSupportFragment() {
     }
 
     private fun onEpisodeClicked(episode: Episode) {
-        // Navigate to episode detail page (like original app)
         val detailFragment = EpisodeDetailsFragment.newInstance(episode)
         requireActivity().supportFragmentManager.beginTransaction()
             .replace(android.R.id.content, detailFragment)

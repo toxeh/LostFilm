@@ -17,6 +17,7 @@ import android.graphics.drawable.Drawable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.twicker.lostfilmtv.R
 import ru.twicker.lostfilmtv.network.*
 
 /**
@@ -50,6 +51,7 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
             }
         }
     }
+
 
     private lateinit var episode: Episode
     private lateinit var rowAdapter: ArrayObjectAdapter
