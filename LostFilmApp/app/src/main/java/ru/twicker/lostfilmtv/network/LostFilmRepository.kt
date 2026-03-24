@@ -13,12 +13,22 @@ private const val TAG = "LFRepository"
 data class Episode(
     val title: String,        // «Неуязвимый»
     val titleEn: String,      // «Invincible»
-    val episodeInfo: String,  // «4 сезон 3 серия»
-    val date: String,         // «22.03.2026»
+    var episodeInfo: String,  // «4 сезон 3 серия»
+    var date: String,         // «22.03.2026»
     val detailsUrl: String,
     val imageUrl: String,
-    val episodeCode: String   // «881-2-10» → used for /v_search.php?a=CODE
-)
+    val episodeCode: String,  // «881-2-10» → used for /v_search.php?a=CODE
+    var isWatched: Boolean = false
+) : java.io.Serializable
+
+data class Series(
+    val title: String,
+    val titleRu: String,
+    val link: String,
+    val poster: String,
+    val genres: String,
+    val year: String
+) : java.io.Serializable
 
 data class TorrentEntry(
     val quality: String,   // «WEB-DLRip», «1080p WEB-DLRip», «720p WEB-DLRip»
@@ -34,8 +44,155 @@ sealed class TorrentsResult {
 
 
 
+data class SeriesDetails(
+    val title: String,
+    val titleRu: String,
+    val description: String,
+    val posterUrl: String,
+    val seasons: Map<String, List<Episode>>,
+    val isFavorite: Boolean = false,
+    val seriesId: String = "",
+    val sessionToken: String = ""
+)
+
 class LostFilmRepository {
-    private val BASE_URL = "https://lostfilm.tv"
+    private val BASE_URL = "https://${NetworkClient.getHost()}"  // www.lostfilm.tv for API
+
+    suspend fun getSeriesDetails(client: OkHttpClient, seriesUrl: String): SeriesDetails? {
+        // Normalize: strip domain to get just the path
+        val path = seriesUrl
+            .replace("https://www.lostfilm.tv", "")
+            .replace("https://lostfilm.tv", "")
+            .replace("http://lostfilm.tv", "")
+            .replace("//lostfilm.tv", "")
+        
+        // Base series url without season_ or seasons/ or episode_
+        val parts = path.split("/").filter { it.isNotBlank() }
+        // parts: ["series", "The_Pitt", "season_2", "episode_11"] or ["series", "The_Pitt"]
+        val baseSeriesPath = if (parts.size >= 2) "/${parts[0]}/${parts[1]}/" else path
+        
+        // Single request: fetch /seasons/ page which has both titles and episode list
+        val seasonsUrl = "https://${NetworkClient.getHost()}${baseSeriesPath}seasons/"
+        Log.d(TAG, "getSeriesDetails: input=$seriesUrl → seasonsUrl=$seasonsUrl")
+        
+        return withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(seasonsUrl)
+                .header("User-Agent", NetworkClient.UA)
+                .build()
+                
+            val response = try {
+                client.newCall(request).execute()
+            } catch (e: Exception) {
+                Log.e(TAG, "getSeriesDetails failed: $seasonsUrl", e)
+                return@withContext null
+            }
+            
+            if (!response.isSuccessful) {
+                Log.e(TAG, "getSeriesDetails HTTP ${response.code}")
+                return@withContext null
+            }
+            val html = response.body?.string() ?: return@withContext null
+            Log.d(TAG, "getSeriesDetails: got ${html.length} chars")
+            
+            val doc = Jsoup.parse(html)
+            
+            // Extract title and description from the same page
+            val titleRu = doc.selectFirst("h1.title-ru")?.text() ?: ""
+            val titleEn = doc.selectFirst("h2.title-en")?.text() ?: ""
+            // Try itemprop first, then meta description
+            var description = doc.selectFirst("div[itemprop=description]")?.text()?.trim() ?: ""
+            if (description.isBlank()) {
+                description = doc.selectFirst("meta[name=description]")?.attr("content")?.trim() ?: ""
+            }
+            Log.d(TAG, "Parsed: titleRu=$titleRu, titleEn=$titleEn, desc=${description.take(50)}")
+            
+            val rows = doc.select("tr")
+            val seasonMap = mutableMapOf<String, MutableList<Episode>>()
+            var seriesId = ""
+            
+            for (row in rows) {
+                val btn = row.selectFirst(".haveseen-btn") ?: continue
+                val gamma = row.selectFirst(".gamma") ?: continue
+                val beta = row.selectFirst(".beta") ?: continue
+                val delta = row.selectFirst(".delta") ?: continue
+                
+                val code = btn.attr("data-code") // e.g. "868-1-1"
+                if (code.isBlank()) continue
+                
+                val isWatched = btn.hasClass("checked")
+                
+                var detailsUrl = beta.attr("onClick")
+                if (detailsUrl != null) {
+                    detailsUrl = detailsUrl.substringAfter("goTo('").substringBefore("',")
+                } else {
+                    detailsUrl = ""
+                }
+                
+                val episodeInfo = beta.text()
+                
+                val titleBlock = gamma.selectFirst("div")
+                val title = titleBlock?.ownText() ?: gamma.ownText()
+                val epTitleEn = gamma.selectFirst("span")?.text() ?: ""
+                
+                val date = delta.selectFirst("span")?.text() ?: ""
+                
+                val codeParts = code.split("-")
+                if (codeParts.isNotEmpty()) seriesId = codeParts[0]
+                // Individual episode image: e_{season}_{episode}.jpg
+                val imageUrl = if (codeParts.size >= 3) {
+                    "https://${NetworkClient.getImageHost()}/Static/Images/${codeParts[0]}/Posters/e_${codeParts[1]}_${codeParts[2]}.jpg"
+                } else if (codeParts.size >= 2) {
+                    "https://${NetworkClient.getImageHost()}/Static/Images/${codeParts[0]}/Posters/image_s${codeParts[1]}.jpg"
+                } else ""
+                
+                val ep = Episode(
+                    title = title,
+                    titleEn = epTitleEn,
+                    episodeInfo = episodeInfo,
+                    date = date,
+                    detailsUrl = detailsUrl,
+                    imageUrl = imageUrl,
+                    episodeCode = code,
+                    isWatched = isWatched
+                )
+                
+                val seasonName = if (codeParts.size >= 2) "${codeParts[1]} сезон" else "Сезон"
+                seasonMap.getOrPut(seasonName) { mutableListOf() }.add(ep)
+            }
+            
+            // Parse poster from itemprop=image (e.g. /Static/Images/1097/Posters/poster.jpg)
+            var posterUrl = doc.selectFirst("img[itemprop=image]")?.attr("src")?.let { src ->
+                if (src.startsWith("http")) src else "https://${NetworkClient.getHost()}$src"
+            } ?: ""
+            // Fallback to constructed URL from seriesId
+            if (posterUrl.isBlank() && seriesId.isNotBlank()) {
+                posterUrl = "https://${NetworkClient.getImageHost()}/Static/Images/$seriesId/Posters/poster.jpg"
+            }
+            
+            // Parse favorite status from onClick: FollowSerial(id, true) means already favorited
+            val favBtn = doc.selectFirst(".favorites-btn, .favorites-btn2")
+            val favOnClick = favBtn?.attr("onClick") ?: ""
+            // FollowSerial(1097, false) = not favorite; class 'favorites-btn' (not btn2) = is favorite
+            val isFavorite = favBtn?.hasClass("favorites-btn") == true && !favBtn.hasClass("favorites-btn2")
+            
+            // Parse session token from inline JS: UserData.session = '...'
+            val sessionToken = Regex("UserData\\.session\\s*=\\s*['\"]([^'\"]+)").find(html)?.groupValues?.get(1) ?: ""
+            
+            Log.d(TAG, "posterUrl=$posterUrl seriesId=$seriesId isFavorite=$isFavorite session=${sessionToken.take(8)}")
+            
+            SeriesDetails(
+                title = titleEn,
+                titleRu = titleRu,
+                description = description,
+                posterUrl = posterUrl,
+                seasons = seasonMap,
+                isFavorite = isFavorite,
+                seriesId = seriesId,
+                sessionToken = sessionToken
+            )
+        }
+    }
 
     suspend fun getRecentEpisodes(client: OkHttpClient = NetworkClient.createProxiedClient()): List<Episode> = withContext(Dispatchers.IO) {
         Log.d(TAG, "Loading recent episodes from $BASE_URL/new")
@@ -90,6 +247,7 @@ class LostFilmRepository {
             // data-code="881-2-10" from markEpisodeAsWatched element, or derive from href
             val code = row.selectFirst("[data-code]")?.attr("data-code")
                 ?: extractCodeFromUrl(href)
+            val isWatched = row.selectFirst(".haveseen-btn")?.hasClass("checked") ?: false
             if (nameRu.isBlank() && nameEn.isBlank()) continue
             episodes.add(Episode(
                 title       = nameRu.ifBlank { nameEn },
@@ -98,12 +256,13 @@ class LostFilmRepository {
                 date        = rightPart,
                 detailsUrl  = href,
                 imageUrl    = img,
-                episodeCode = code
+                episodeCode = code,
+                isWatched   = isWatched
             ))
         }
 
         Log.d(TAG, "Parsed ${episodes.size} episodes from .row elements")
-        episodes.take(3).forEach { Log.d(TAG, "  ep: ${it.title} img=${it.imageUrl} code=${it.episodeCode}") }
+        episodes.take(3).forEach { Log.d(TAG, "  ep: ${it.title} img=${it.imageUrl} code=${it.episodeCode} watched=${it.isWatched}") }
         episodes
     }
 
@@ -235,6 +394,173 @@ class LostFilmRepository {
         return result
     }
 
+    /**
+     * Loads the episode information from its details page.
+     * Uses the episode's detailsUrl (e.g. /series/The_Pitt/season_2/episode_11/).
+     * Falls back to v_search.php if detailsUrl is empty.
+     */
+    suspend fun getEpisodeInfo(client: okhttp3.OkHttpClient, episodeCode: String, detailsUrl: String = ""): EpisodeInfo? = withContext(Dispatchers.IO) {
+        try {
+            // Try loading from episode page first (detailsUrl)
+            if (detailsUrl.isNotBlank()) {
+                val pageUrl = if (detailsUrl.startsWith("http")) detailsUrl
+                              else "https://${NetworkClient.getHost()}$detailsUrl"
+                val request = okhttp3.Request.Builder()
+                    .url(pageUrl)
+                    .header("User-Agent", NetworkClient.UA)
+                    .build()
+                
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val html = response.body?.string() ?: ""
+                    val document = org.jsoup.Jsoup.parse(html)
+                    
+                    // Try text-block description first (some pages have it)
+                    var desc = document.selectFirst("div.text-block.description > div.body > div.body")?.text()?.trim()
+                    
+                    // Fall back to meta description
+                    if (desc.isNullOrBlank()) {
+                        desc = document.selectFirst("meta[name=description]")?.attr("content")?.trim()
+                    }
+                    
+                    // Also try itemprop=description
+                    if (desc.isNullOrBlank()) {
+                        desc = document.selectFirst("div[itemprop=description]")?.text()?.trim()
+                    }
+                    
+                    val runtime = document.selectFirst("div.details-pane > div:nth-child(2)")?.text()?.trim()
+                    
+                    if (!desc.isNullOrBlank()) {
+                        // Parse data-episode value (e.g. "972002011") for watched API
+                        val dataEpisode = document.selectFirst(".isawthat-btn[data-episode]")?.attr("data-episode") ?: ""
+                        
+                        // Parse UserData.session from inline JS
+                        val sessionToken = Regex("UserData\\.session\\s*=\\s*['\"]([^'\"]+)").find(html)?.groupValues?.get(1) ?: ""
+                        
+                        return@withContext EpisodeInfo(description = desc, runtime = runtime, dataEpisode = dataEpisode, sessionToken = sessionToken)
+                    }
+                }
+            }
+            
+            // Fallback: try v_search.php
+            val url = "https://${NetworkClient.getHost()}/v_search.php?a=$episodeCode"
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", NetworkClient.UA)
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext null
+
+            val html = response.body?.string() ?: return@withContext null
+            val document = org.jsoup.Jsoup.parse(html)
+            
+            var desc = document.selectFirst("div.text-block.description > div.body > div.body")?.text()?.trim()
+            if (desc.isNullOrBlank()) {
+                desc = document.selectFirst("meta[name=description]")?.attr("content")?.trim()
+            }
+            val runtime = document.selectFirst("div.details-pane > div:nth-child(2)")?.text()?.trim()
+            
+            return@withContext EpisodeInfo(description = desc, runtime = runtime)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load episode info", e)
+            return@withContext null
+        }
+    }
+    
+    data class EpisodeInfo(
+        val description: String?,
+        val runtime: String?,
+        val dataEpisode: String = "",
+        val sessionToken: String = ""
+    )
+
+    /** Set watched status via ajaxik.php */
+    suspend fun setWatched(client: okhttp3.OkHttpClient, dataEpisode: String, sessionToken: String, watched: Boolean): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://${NetworkClient.getHost()}/ajaxik.php"
+            
+            val bodyBuilder = okhttp3.FormBody.Builder()
+                .add("act", "serial")
+                .add("type", "markepisode")
+                .add("val", dataEpisode)
+                .add("auto", "0")
+                .add("mode", if (watched) "on" else "off")
+            
+            if (sessionToken.isNotBlank()) {
+                bodyBuilder.add("session", sessionToken)
+            }
+            
+            val body = bodyBuilder.build()
+
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .post(body)
+                .header("User-Agent", NetworkClient.UA)
+                .header("Referer", "https://${NetworkClient.getHost()}/")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            val ok = response.isSuccessful
+            Log.d(TAG, "setWatched(dataEp=$dataEpisode, watched=$watched) → HTTP ${response.code} body=$responseBody")
+            ok
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set watched status", e)
+            false
+        }
+    }
+
+    /**
+     * Toggle favorite status via ajaxik.php.
+     * LostFilm API uses act=serial&type=follow&id=X as a TOGGLE.
+     * Response: {"result":"on"} or {"result":"off"}
+     * Returns the new state: true=now favorite, false=now not favorite, null=error
+     */
+    suspend fun toggleFavorite(client: okhttp3.OkHttpClient, seriesId: String, sessionToken: String): Boolean? = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://${NetworkClient.getHost()}/ajaxik.php"
+            
+            val bodyBuilder = okhttp3.FormBody.Builder()
+                .add("act", "serial")
+                .add("type", "follow")
+                .add("id", seriesId)
+            
+            if (sessionToken.isNotBlank()) {
+                bodyBuilder.add("session", sessionToken)
+            }
+            
+            val body = bodyBuilder.build()
+
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .post(body)
+                .header("User-Agent", NetworkClient.UA)
+                .header("Referer", "https://${NetworkClient.getHost()}/")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            Log.d(TAG, "toggleFavorite(id=$seriesId) → HTTP ${response.code} body=$responseBody")
+            
+            if (!response.isSuccessful) return@withContext null
+            
+            // Parse result: {"result":"on"} or {"result":"off"}
+            val json = org.json.JSONObject(responseBody)
+            val result = json.optString("result", "")
+            when (result) {
+                "on" -> true
+                "off" -> false
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to toggle favorite", e)
+            null
+        }
+    }
+
     /** Extract series code from URL like /series/Landman/season_2/episode_10/ → empty (code unknown from URL alone) */
     private fun extractCodeFromUrl(url: String): String = ""
 
@@ -252,6 +578,69 @@ class LostFilmRepository {
             raw.startsWith("/")          -> "$BASE_URL$raw"
             raw.startsWith("http")       -> raw
             else                         -> raw
+        }
+    }
+
+    /**
+     * Search series by name via ajaxik.php API.
+     * Returns list of Series matching the query.
+     */
+    suspend fun searchSeries(client: OkHttpClient, query: String): List<Series> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
+        Log.d(TAG, "searchSeries: query=$query")
+
+        val body = okhttp3.FormBody.Builder()
+            .add("act", "common")
+            .add("type", "search")
+            .add("val", query)
+            .build()
+
+        val request = Request.Builder()
+            .url("$BASE_URL/ajaxik.php")
+            .post(body)
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Referer", "$BASE_URL/")
+            .build()
+
+        val response = try {
+            client.newCall(request).execute()
+        } catch (e: Exception) {
+            Log.e(TAG, "searchSeries failed", e)
+            return@withContext emptyList()
+        }
+
+        if (!response.isSuccessful) {
+            Log.e(TAG, "searchSeries HTTP ${response.code}")
+            return@withContext emptyList()
+        }
+
+        val json = response.body?.string() ?: return@withContext emptyList()
+        Log.d(TAG, "searchSeries response: ${json.take(200)}")
+
+        try {
+            val root = org.json.JSONObject(json)
+            val data = root.optJSONObject("data") ?: return@withContext emptyList()
+            val seriesArr = data.optJSONArray("series") ?: return@withContext emptyList()
+
+            val results = mutableListOf<Series>()
+            for (i in 0 until seriesArr.length()) {
+                val s = seriesArr.getJSONObject(i)
+                val icon = s.optString("icon", "")
+                val posterUrl = if (icon.isNotBlank()) "https://${NetworkClient.getHost()}$icon" else ""
+                results.add(Series(
+                    title = s.optString("title_orig", ""),
+                    titleRu = s.optString("title", ""),
+                    link = s.optString("link", ""),
+                    poster = posterUrl,
+                    genres = "",
+                    year = ""
+                ))
+            }
+            Log.d(TAG, "searchSeries: found ${results.size} series")
+            results
+        } catch (e: Exception) {
+            Log.e(TAG, "searchSeries parse error", e)
+            emptyList()
         }
     }
 }

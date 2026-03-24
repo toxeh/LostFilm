@@ -212,13 +212,16 @@ object ProxyConfig {
 // ═══════════════════════════════════════════════════════════════════
 
 object NetworkClient {
-    private const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+    const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+    fun getHost(): String = "www.lostfilm.tv"
+    fun getImageHost(): String = "www.lostfilm.tv"
 
     private val dohBootstrap = OkHttpClient.Builder().build()
     private val doh = DnsOverHttps.Builder().client(dohBootstrap)
         .url("https://1.1.1.1/dns-query".toHttpUrl())
         .bootstrapDnsHosts(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("1.0.0.1")).build()
 
+    val doHDns: Dns get() = ipv4Dns
     private val ipv4Dns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             val addrs = doh.lookup(hostname)

@@ -70,10 +70,37 @@ class LoginFragment : Fragment() {
     }
 
     private fun startupFlow() {
-        setStatus("Запуск ciadpi...")
         lifecycleScope.launch {
-            val ok = withContext(Dispatchers.IO) { CiadpiRunner.start(requireContext()) }
-            if (!ok) { showError("ciadpi не запустился"); return@launch }
+            // 1. Start ciadpi with best strategy (or tune if first time)
+            val ctx = requireContext()
+            val saved = CiadpiTuner.getSavedStrategy(ctx)
+            if (saved != null) {
+                setStatus("Запуск ciadpi (${saved.name})...")
+                val ok = withContext(Dispatchers.IO) { CiadpiRunner.start(ctx, CiadpiTuner.getProductionArgs(saved)) }
+                if (!ok) { showError("ciadpi не запустился"); return@launch }
+
+                // Verify saved strategy with a test image download (340KB)
+                setStatus("Проверка обхода DPI...")
+                val verified = withContext(Dispatchers.IO) { CiadpiTuner.verifyStrategy() }
+                if (!verified) {
+                    setStatus("Стратегия устарела, подбираем заново...")
+                    CiadpiTuner.clearSavedStrategy(ctx)
+                    val bestIdx = CiadpiTuner.tune(ctx) { name, idx, total ->
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            setStatus("Подбор стратегии (${idx + 1}/$total): $name")
+                        }
+                    }
+                    if (bestIdx < 0) { showError("Не удалось подобрать стратегию DPI"); return@launch }
+                }
+            } else {
+                setStatus("Подбор стратегии DPI...")
+                val bestIdx = CiadpiTuner.tune(ctx) { name, idx, total ->
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        setStatus("Подбор стратегии (${idx + 1}/$total): $name")
+                    }
+                }
+                if (bestIdx < 0) { showError("Не удалось подобрать стратегию DPI"); return@launch }
+            }
 
             val c = NetworkClient.createCiadpiClient(cookieJar).also { client = it }
 
@@ -82,15 +109,10 @@ class LoginFragment : Fragment() {
                 setStatus("Проверка сессии...")
                 val authed = withContext(Dispatchers.IO) { LostFilmAuth.isAuthenticated(c) }
                 if (authed) {
-                    setStatus("Загрузка эпизодов...")
-                    val eps = withContext(Dispatchers.IO) {
-                        try { repository.getRecentEpisodes(c) } catch (e: Exception) { null }
-                    }
-                    if (eps != null) {
-                        Log.d(TAG, "Session valid, episodes loaded: ${eps.size}")
-                        (activity as? ru.twicker.lostfilmtv.MainActivity)?.showBrowseFragment()
-                        return@launch
-                    }
+                    // Session is valid — go to browse even if episodes fail to preload
+                    Log.d(TAG, "Session valid, proceeding to browse")
+                    (activity as? ru.twicker.lostfilmtv.MainActivity)?.showBrowseFragment()
+                    return@launch
                 }
                 Log.d(TAG, "Session expired, showing login")
                 cookieJar.clearSession()

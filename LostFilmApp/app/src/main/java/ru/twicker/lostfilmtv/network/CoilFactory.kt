@@ -8,11 +8,9 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * Singleton Coil ImageLoader that uses ciadpi proxy for loading images
- * from lostfilm.tv (which is blocked without DPI bypass).
- *
- * Key: limits max parallel requests to 2 per host because
- * ciadpi can't handle many concurrent connections.
+ * Singleton Coil ImageLoader via ciadpi proxy.
+ * Images use lostfilm.tv (no www) — the bare domain works through ciadpi,
+ * while www.lostfilm.tv Cloudflare IPs are not reachable via the proxy.
  */
 object CoilFactory {
 
@@ -25,11 +23,12 @@ object CoilFactory {
         }
     }
 
+    fun reset() { imageLoader = null }
+
     private fun buildImageLoader(context: Context): ImageLoader {
         val cookieJar = LostFilmAuth.cookieJar(context)
         val baseClient = NetworkClient.createCiadpiClient(cookieJar)
 
-        // Limit parallelism — ciadpi proxy can't handle many concurrent connections
         val dispatcher = Dispatcher().apply {
             maxRequests = 4
             maxRequestsPerHost = 2
@@ -37,8 +36,8 @@ object CoilFactory {
 
         val imageClient = baseClient.newBuilder()
             .dispatcher(dispatcher)
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .build()
 
         return ImageLoader.Builder(context)

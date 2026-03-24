@@ -31,7 +31,7 @@ object CiadpiRunner {
      * Start the embedded ciadpi from nativeLibraryDir (always executable on Android).
      * Returns true if started and port 10800 is reachable.
      */
-    fun start(context: Context): Boolean {
+    fun start(context: Context, strategyArgs: List<String> = listOf("--tlsrec", "1+s", "--timeout", "8")): Boolean {
         stop()
 
         // Android installs .so files from jniLibs into nativeLibraryDir with +x
@@ -42,18 +42,10 @@ object CiadpiRunner {
         }
         Log.i(TAG, "Found ciadpi at ${binFile.absolutePath} (${binFile.length()} bytes)")
 
-
-        // ciadpi command: SOCKS5 on 127.0.0.1:10800 with TLS record split
-        // --tlsrec 1+s  = split at position 1 byte into SNI
-        // --disorder 1  = send 1 byte with TTL=1 to desync DPI (Linux-only, but harmless on Android)
+        // Use provided strategy args or default
         port = findFreePort()
-        val cmd = listOf(
-            binFile.absolutePath,
-            "--port", "$port",
-            "--tlsrec", "1+s",
-            "--auto=torst",
-            "--timeout", "3"
-        )
+        val cmd = mutableListOf(binFile.absolutePath, "--port", "$port")
+        cmd.addAll(strategyArgs)
 
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
 

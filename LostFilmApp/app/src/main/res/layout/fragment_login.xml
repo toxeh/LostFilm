@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#FF14181C"
-    android:gravity="center"
-    android:padding="48dp">
+    android:fillViewport="true">
+
+<LinearLayout
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_horizontal"
+    android:padding="24dp">
 
     <TextView
         android:id="@+id/tv_app_title"
@@ -24,7 +29,7 @@
         android:text="Войдите в аккаунт"
         android:textColor="#B3EEEEEE"
         android:textSize="18sp"
-        android:layout_marginBottom="32dp"/>
+        android:layout_marginBottom="24dp"/>
 
     <TextView
         android:id="@+id/tv_error"
@@ -33,7 +38,7 @@
         android:textColor="#FFE53935"
         android:textSize="14sp"
         android:gravity="center"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="12dp"
         android:visibility="gone"/>
 
     <LinearLayout
@@ -41,7 +46,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="#FF222538"
-        android:padding="32dp">
+        android:padding="24dp">
 
         <TextView
             android:layout_width="wrap_content"
@@ -58,7 +63,7 @@
             android:inputType="textEmailAddress"
             android:textColor="#FFEEEEEE"
             android:hint="user@example.com"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginBottom="12dp"/>
 
         <TextView
             android:layout_width="wrap_content"
@@ -75,7 +80,7 @@
             android:inputType="textPassword"
             android:textColor="#FFEEEEEE"
             android:hint="Пароль"
-            android:layout_marginBottom="24dp"/>
+            android:layout_marginBottom="16dp"/>
 
         <LinearLayout
             android:id="@+id/captcha_layout"
@@ -83,7 +88,7 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:visibility="gone"
-            android:layout_marginBottom="24dp">
+            android:layout_marginBottom="16dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -122,7 +127,7 @@
         android:id="@+id/progress"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="16dp"
         android:visibility="gone"/>
 
     <TextView
@@ -135,3 +140,4 @@
         android:layout_marginTop="8dp"/>
 
 </LinearLayout>
+</ScrollView>

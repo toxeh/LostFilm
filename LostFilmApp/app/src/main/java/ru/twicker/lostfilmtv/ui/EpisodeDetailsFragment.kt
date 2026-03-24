@@ -36,6 +36,9 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
         private const val ACTION_HD = 3L
         private const val ACTION_MP4 = 4L
         private const val ACTION_FHD = 5L
+        private const val ACTION_WATCHED = 6L
+        private const val ACTION_SERIE = 8L
+        private const val ACTION_SEASON = 9L
 
         fun newInstance(episode: Episode): EpisodeDetailsFragment {
             return EpisodeDetailsFragment().apply {
@@ -47,6 +50,7 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
                     putString("detailsUrl", episode.detailsUrl)
                     putString("imageUrl", episode.imageUrl)
                     putString("episodeCode", episode.episodeCode)
+                    putBoolean("isWatched", episode.isWatched)
                 }
             }
         }
@@ -58,6 +62,8 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
     private var client: okhttp3.OkHttpClient? = null
     private val repository = LostFilmRepository()
     private var torrentEntries: List<TorrentEntry> = emptyList()
+    private var dataEpisode: String = ""  // e.g. "972002011" for watched API
+    private var sessionToken: String = ""  // CSRF token from UserData.session
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,7 +76,8 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
             date = args.getString("date", ""),
             detailsUrl = args.getString("detailsUrl", ""),
             imageUrl = args.getString("imageUrl", ""),
-            episodeCode = args.getString("episodeCode", "")
+            episodeCode = args.getString("episodeCode", ""),
+            isWatched = args.getBoolean("isWatched", false)
         )
 
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
@@ -103,32 +110,152 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
         // Details overview row with poster image + actions
         val detailsRow = DetailsOverviewRow(episode)
 
-        // Load poster image
-        val imgUrl = episode.imageUrl
-        if (imgUrl.isNotBlank()) {
-            val request = ImageRequest.Builder(requireContext())
-                .data(imgUrl)
-                .target(object : Target {
-                    override fun onSuccess(result: Drawable) {
-                        detailsRow.imageDrawable = result
-                        rowAdapter.notifyArrayItemRangeChanged(0, 1)
-                    }
-                    override fun onError(error: Drawable?) {
-                        detailsRow.imageDrawable = ColorDrawable(Color.DKGRAY)
-                    }
-                })
-                .build()
-            ru.twicker.lostfilmtv.network.CoilFactory.get(requireContext()).enqueue(request)
+        // Episode image URL (for background)
+        val codeParts = episode.episodeCode.split("-")
+        val episodeImgUrl = if (codeParts.size >= 3) {
+            "https://${ru.twicker.lostfilmtv.network.NetworkClient.getImageHost()}/Static/Images/${codeParts[0]}/Posters/e_${codeParts[1]}_${codeParts[2]}.jpg"
+        } else ""
+
+        // Series poster URL (for small thumbnail in details row)
+        val seriesPosterUrl = if (codeParts.isNotEmpty()) {
+            "https://${ru.twicker.lostfilmtv.network.NetworkClient.getImageHost()}/Static/Images/${codeParts[0]}/Posters/image.jpg"
+        } else ""
+
+        // Setup BackgroundManager for the full-width top area
+        val bgManager = androidx.leanback.app.BackgroundManager.getInstance(requireActivity())
+        if (!bgManager.isAttached) bgManager.attach(requireActivity().window)
+
+        val displayMetrics = resources.displayMetrics
+        val screenW = displayMetrics.widthPixels
+        val screenH = displayMetrics.heightPixels
+
+        fun applyBackground(bitmap: android.graphics.Bitmap) {
+            val scaledBitmap = android.graphics.Bitmap.createBitmap(screenW, screenH, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(scaledBitmap)
+            val scale = maxOf(screenW.toFloat() / bitmap.width, screenH.toFloat() / bitmap.height)
+            val dstW = (bitmap.width * scale).toInt()
+            val dstH = (bitmap.height * scale).toInt()
+            canvas.drawBitmap(bitmap, null, android.graphics.Rect(
+                (screenW - dstW) / 2, (screenH - dstH) / 2,
+                (screenW + dstW) / 2, (screenH + dstH) / 2
+            ), null)
+            bgManager.setBitmap(scaledBitmap)
         }
 
-        // Initial action: "Смотреть"
-        val actionAdapter = SparseArrayObjectAdapter()
-        actionAdapter.set(ACTION_WATCH.toInt(), Action(ACTION_WATCH, "Смотреть", ""))
-        detailsRow.actionsAdapter = actionAdapter
+        fun applyPoster(bitmap: android.graphics.Bitmap) {
+            detailsRow.imageDrawable = android.graphics.drawable.BitmapDrawable(resources, bitmap)
+            rowAdapter.notifyArrayItemRangeChanged(0, 1)
+        }
+
+        // Init download queue
+        val imgClient = client ?: ru.twicker.lostfilmtv.network.NetworkClient.createCiadpiClient(
+            ru.twicker.lostfilmtv.network.LostFilmAuth.cookieJar(requireContext())
+        )
+        ru.twicker.lostfilmtv.network.ImageDownloadQueue.init(requireContext(), imgClient)
+
+        // Small poster (series poster)
+        val cachedPoster = if (seriesPosterUrl.isNotBlank()) {
+            ru.twicker.lostfilmtv.network.ImageCache.get(requireContext(), seriesPosterUrl)
+        } else null
+
+        if (cachedPoster != null) {
+            applyPoster(cachedPoster)
+        } else {
+            detailsRow.imageDrawable = ColorDrawable(Color.parseColor("#33FFFFFF"))
+            if (seriesPosterUrl.isNotBlank()) {
+                ru.twicker.lostfilmtv.network.ImageDownloadQueue.enqueue(seriesPosterUrl) { bitmap ->
+                    if (bitmap != null) {
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            if (isAdded) applyPoster(bitmap)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Background image (episode image)
+        val cachedBg = if (episodeImgUrl.isNotBlank()) {
+            ru.twicker.lostfilmtv.network.ImageCache.get(requireContext(), episodeImgUrl)
+        } else null
+
+        if (cachedBg != null) {
+            applyBackground(cachedBg)
+        } else if (episodeImgUrl.isNotBlank()) {
+            ru.twicker.lostfilmtv.network.ImageDownloadQueue.enqueue(episodeImgUrl) { bitmap ->
+                if (bitmap != null) {
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        if (isAdded) applyBackground(bitmap)
+                    }
+                }
+            }
+        }
+
+        // Initial actions
+        rebuildDefaultActions(detailsRow)
 
         rowAdapter.add(detailsRow)
         adapter = rowAdapter
         onItemViewClickedListener = this
+
+        // Load description and runtime
+        loadEpisodeInfo(detailsRow)
+    }
+
+    private fun rebuildDefaultActions(detailsRow: DetailsOverviewRow) {
+        val actionAdapter = SparseArrayObjectAdapter()
+        actionAdapter.set(ACTION_WATCH.toInt(), Action(ACTION_WATCH, "Смотреть", ""))
+        
+        // Show status based on whether it is watched
+        val watchedIcon = androidx.core.content.ContextCompat.getDrawable(requireContext(), R.drawable.ic_watched)?.mutate()
+        if (episode.isWatched) {
+            watchedIcon?.setTint(android.graphics.Color.parseColor("#FF745ec5"))
+        } else {
+            watchedIcon?.setTint(android.graphics.Color.parseColor("#FFCCCCCC"))
+        }
+        actionAdapter.set(ACTION_WATCHED.toInt(), Action(ACTION_WATCHED, "", "", watchedIcon))
+        
+        actionAdapter.set(ACTION_SERIE.toInt(), Action(ACTION_SERIE, "Перейти к сериалу", ""))
+        
+        if (episode.detailsUrl.contains("/season_")) {
+            actionAdapter.set(ACTION_SEASON.toInt(), Action(ACTION_SEASON, "Перейти к сезону", ""))
+        }
+        detailsRow.actionsAdapter = actionAdapter
+    }
+
+    private fun loadEpisodeInfo(detailsRow: DetailsOverviewRow) {
+        val c = client ?: return
+        val code = episode.episodeCode
+        if (code.isBlank()) return
+
+        lifecycleScope.launch {
+            val info = withContext(Dispatchers.IO) {
+                repository.getEpisodeInfo(c, code, episode.detailsUrl)
+            }
+            if (info != null) {
+                if (!info.description.isNullOrBlank()) {
+                    episode.episodeInfo = episode.episodeInfo + "\n\n" + info.description
+                }
+                if (!info.runtime.isNullOrBlank()) {
+                    episode.date = episode.date + "  ·  " + info.runtime
+                }
+                
+                // Store data-episode and session for watched API
+                if (info.dataEpisode.isNotBlank()) {
+                    dataEpisode = info.dataEpisode
+                }
+                if (info.sessionToken.isNotBlank()) {
+                    sessionToken = info.sessionToken
+                }
+                Log.d(TAG, "Loaded episode info: dataEpisode=$dataEpisode session=${sessionToken.take(8)}...")
+                
+                // Update the row item to trigger re-bind of the description presenter
+                detailsRow.item = episode
+                val index = rowAdapter.indexOf(detailsRow)
+                if (index >= 0) {
+                    rowAdapter.notifyArrayItemRangeChanged(index, 1)
+                }
+            }
+        }
     }
 
     override fun onItemClicked(
@@ -149,15 +276,117 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
                     loadTorrents(actionAdapter)
                 }
             }
+            ACTION_WATCHED -> {
+                // Toggle watched status
+                toggleWatchedStatus(detailsRow, actionAdapter)
+            }
+            ACTION_SERIE -> {
+                // Navigate to Serie
+                navigateToSerie()
+            }
+            ACTION_SEASON -> {
+                // Navigate to Season
+                navigateToSeason()
+            }
             ACTION_BACK -> {
-                // Reset to "Смотреть"
-                actionAdapter.clear()
-                actionAdapter.set(ACTION_WATCH.toInt(), Action(ACTION_WATCH, "Смотреть", ""))
+                // Reset to default actions — fresh adapter to guarantee quality buttons removed
+                rebuildDefaultActions(detailsRow)
             }
             ACTION_SD -> downloadTorrent("SD")
             ACTION_HD -> downloadTorrent("720p")
             ACTION_MP4 -> downloadTorrent("MP4")
             ACTION_FHD -> downloadTorrent("1080p")
+        }
+    }
+
+    private fun toggleWatchedStatus(detailsRow: DetailsOverviewRow, actionAdapter: SparseArrayObjectAdapter) {
+        val c = client ?: return
+        val code = episode.episodeCode
+        if (code.isBlank()) return
+
+        val newStatus = !episode.isWatched
+        episode.isWatched = newStatus
+
+        // Update only the watched icon in-place (no clear → no focus jump)
+        updateWatchedIcon(actionAdapter)
+        
+        // Fire-and-forget: NonCancellable so the request completes even if fragment is destroyed
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+                try {
+                    repository.setWatched(c, dataEpisode, sessionToken, newStatus)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to toggle watch status", e)
+                }
+            }
+        }
+    }
+
+    private fun updateWatchedIcon(actionAdapter: SparseArrayObjectAdapter) {
+        val watchedIcon = androidx.core.content.ContextCompat.getDrawable(requireContext(), R.drawable.ic_watched)?.mutate()
+        if (episode.isWatched) {
+            watchedIcon?.setTint(android.graphics.Color.parseColor("#FF745ec5"))
+        } else {
+            watchedIcon?.setTint(android.graphics.Color.parseColor("#FFCCCCCC"))
+        }
+        actionAdapter.set(ACTION_WATCHED.toInt(), Action(ACTION_WATCHED, "", "", watchedIcon))
+    }
+
+    private fun navigateToSerie() {
+        val url = episode.detailsUrl
+        if (url.isBlank()) return
+        
+        val path = url.replace("https://www.lostfilm.tv", "")
+                      .replace("https://lostfilm.tv", "")
+                      .replace("http://lostfilm.tv", "")
+                      .replace("//lostfilm.tv", "")
+        
+        val parts = path.split("/").filter { it.isNotBlank() }
+        if (parts.size >= 2) {
+            val serieUrl = "/${parts[0]}/${parts[1]}/" // /series/The_Penguin/
+            
+            val series = Series(
+                title = episode.titleEn,
+                titleRu = episode.title,
+                link = serieUrl,
+                poster = "",
+                genres = "",
+                year = ""
+            )
+            
+            val intent = android.content.Intent(requireContext(), ru.twicker.lostfilmtv.SerieActivity::class.java).apply {
+                putExtra("serie", series)
+            }
+            startActivity(intent)
+        }
+    }
+
+    private fun navigateToSeason() {
+        val url = episode.detailsUrl
+        if (url.isBlank()) return
+        
+        val path = url.replace("https://www.lostfilm.tv", "")
+                      .replace("https://lostfilm.tv", "")
+                      .replace("http://lostfilm.tv", "")
+                      .replace("//lostfilm.tv", "")
+        
+        val parts = path.split("/").filter { it.isNotBlank() }
+        if (parts.size >= 3) {
+            val seasonUrl = "/${parts[0]}/${parts[1]}/${parts[2]}/" // /series/The_Penguin/season_1/
+            
+            val series = Series(
+                title = episode.titleEn,
+                titleRu = episode.title,
+                link = seasonUrl,
+                poster = "",
+                genres = "",
+                year = ""
+            )
+            
+            val intent = android.content.Intent(requireContext(), ru.twicker.lostfilmtv.SerieActivity::class.java).apply {
+                putExtra("serie", series)
+            }
+            startActivity(intent)
         }
     }
 
