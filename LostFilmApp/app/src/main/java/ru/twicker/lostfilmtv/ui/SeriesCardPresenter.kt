@@ -71,7 +71,8 @@ class SeriesCardPresenter : Presenter() {
     }
 
     companion object {
-        const val CARD_WIDTH = 176
-        const val CARD_HEIGHT = 248
+        // Match EpisodeCardPresenter dimensions (16:9 horizontal)
+        const val CARD_WIDTH = 313
+        const val CARD_HEIGHT = 176
     }
 }

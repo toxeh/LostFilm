@@ -134,26 +134,26 @@ class MainBrowseFragment : BrowseSupportFragment() {
         Log.d(TAG, "setupRows with ${episodes.size} episodes, ${favorites.size} favorites")
         val episodePresenter = EpisodeCardPresenter()
 
-        val mainAdapter = ArrayObjectAdapter(episodePresenter)
-        episodes.forEach { mainAdapter.add(it) }
-        rowsAdapter.add(ListRow(HeaderItem(0, "Новые эпизоды"), mainAdapter))
-
-        if (episodes.size > 5) {
-            val recentAdapter = ArrayObjectAdapter(episodePresenter)
-            episodes.take(5).forEach { recentAdapter.add(it) }
-            rowsAdapter.add(ListRow(HeaderItem(1, "Свежие"), recentAdapter))
-
-            val olderAdapter = ArrayObjectAdapter(episodePresenter)
-            episodes.drop(5).forEach { olderAdapter.add(it) }
-            rowsAdapter.add(ListRow(HeaderItem(2, "Ещё"), olderAdapter))
-        }
-
-        // Избранное row (favorite series)
+        // Избранное row FIRST (favorite series)
         if (favorites.isNotEmpty()) {
             val seriesPresenter = SeriesCardPresenter()
             val favAdapter = ArrayObjectAdapter(seriesPresenter)
             favorites.forEach { favAdapter.add(it) }
-            rowsAdapter.add(ListRow(HeaderItem(3, "Избранное"), favAdapter))
+            rowsAdapter.add(ListRow(HeaderItem(0, "Избранное"), favAdapter))
+        }
+
+        val mainAdapter = ArrayObjectAdapter(episodePresenter)
+        episodes.forEach { mainAdapter.add(it) }
+        rowsAdapter.add(ListRow(HeaderItem(1, "Новые эпизоды"), mainAdapter))
+
+        if (episodes.size > 5) {
+            val recentAdapter = ArrayObjectAdapter(episodePresenter)
+            episodes.take(5).forEach { recentAdapter.add(it) }
+            rowsAdapter.add(ListRow(HeaderItem(2, "Свежие"), recentAdapter))
+
+            val olderAdapter = ArrayObjectAdapter(episodePresenter)
+            episodes.drop(5).forEach { olderAdapter.add(it) }
+            rowsAdapter.add(ListRow(HeaderItem(3, "Ещё"), olderAdapter))
         }
 
         // Settings row
