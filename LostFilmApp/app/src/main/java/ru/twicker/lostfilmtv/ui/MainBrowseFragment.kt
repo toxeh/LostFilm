@@ -191,7 +191,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     private fun onSeriesClicked(series: Series) {
         val intent = android.content.Intent(requireContext(), ru.twicker.lostfilmtv.SerieActivity::class.java)
-        intent.putExtra("series", series)
+        intent.putExtra("serie", series)
         startActivity(intent)
     }
 
