@@ -58,6 +58,81 @@ data class SeriesDetails(
 class LostFilmRepository {
     private val BASE_URL = "https://${NetworkClient.getHost()}"  // www.lostfilm.tv for API
 
+    /**
+     * Fetch user's favorite series from /series/?type=search&s=3&t=99
+     * s=3 = "мои сериалы", t=99 = все типы
+     */
+    suspend fun getFavoriteSeries(client: OkHttpClient): List<Series> = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://${NetworkClient.getHost()}/series/?type=search&s=3&t=99"
+            Log.d(TAG, "getFavoriteSeries: fetching $url")
+            
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", NetworkClient.UA)
+                .build()
+            
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.e(TAG, "getFavoriteSeries HTTP ${response.code}")
+                return@withContext emptyList()
+            }
+            
+            val html = response.body?.string() ?: return@withContext emptyList()
+            Log.d(TAG, "getFavoriteSeries: got ${html.length} chars")
+            
+            val doc = Jsoup.parse(html)
+            val results = mutableListOf<Series>()
+            
+            // Page has: <a href="/series/Slug" class="no-decoration">
+            //             <img src="/Static/Images/XXX/Posters/image.jpg" class="thumb">
+            //           </a>
+            // And nearby: <div class="name-ru">Название</div> <div class="name-en">Title</div>
+            val links = doc.select("a.no-decoration[href^=/series/]")
+            Log.d(TAG, "getFavoriteSeries: found ${links.size} series links")
+            
+            val seen = mutableSetOf<String>()
+            for (link in links) {
+                val href = link.attr("href")
+                val match = Regex("/series/([^/]+)").find(href) ?: continue
+                val seriesSlug = match.groupValues[1]
+                if (seriesSlug in seen) continue
+                seen.add(seriesSlug)
+                
+                // Poster from img.thumb inside the link
+                val img = link.selectFirst("img.thumb")
+                val posterSrc = img?.attr("src") ?: ""
+                val posterUrl = if (posterSrc.isNotBlank()) {
+                    if (posterSrc.startsWith("//")) "https:$posterSrc"
+                    else if (posterSrc.startsWith("/")) "https://${NetworkClient.getHost()}$posterSrc"
+                    else posterSrc
+                } else ""
+                
+                // Title from sibling or parent
+                val parent = link.parent()
+                val titleRu = parent?.selectFirst(".name-ru")?.text()?.trim() ?: ""
+                val titleEn = parent?.selectFirst(".name-en")?.text()?.trim() ?: ""
+                
+                if (titleRu.isBlank() && titleEn.isBlank()) continue
+                
+                results.add(Series(
+                    title = if (titleEn.isNotBlank()) titleEn else seriesSlug.replace("_", " "),
+                    titleRu = if (titleRu.isNotBlank()) titleRu else seriesSlug.replace("_", " "),
+                    link = "/series/$seriesSlug/",
+                    poster = posterUrl,
+                    genres = "",
+                    year = ""
+                ))
+            }
+            
+            Log.d(TAG, "getFavoriteSeries: parsed ${results.size} series")
+            results
+        } catch (e: Exception) {
+            Log.e(TAG, "getFavoriteSeries failed", e)
+            emptyList()
+        }
+    }
+
     suspend fun getSeriesDetails(client: OkHttpClient, seriesUrl: String): SeriesDetails? {
         // Normalize: strip domain to get just the path
         val path = seriesUrl

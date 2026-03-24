@@ -77,6 +77,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
         onItemViewClickedListener = OnItemViewClickedListener { _, item, _, _ ->
             when (item) {
                 is Episode -> onEpisodeClicked(item)
+                is Series -> onSeriesClicked(item)
                 is String  -> if (item.contains("Настройки")) onSettingsClicked()
             }
         }
@@ -108,11 +109,15 @@ class MainBrowseFragment : BrowseSupportFragment() {
                 val episodes = withContext(Dispatchers.IO) {
                     repository.getRecentEpisodes(c)
                 }
-                Log.d(TAG, "loadEpisodes got ${episodes.size} episodes")
+                val favorites = withContext(Dispatchers.IO) {
+                    try { repository.getFavoriteSeries(c) } catch (_: Exception) { emptyList() }
+                }
+                
+                Log.d(TAG, "loadEpisodes got ${episodes.size} episodes, ${favorites.size} favorites")
                 if (episodes.isEmpty()) {
                     Toast.makeText(requireContext(), "Нет новых эпизодов", Toast.LENGTH_LONG).show()
                 } else {
-                    setupRows(episodes)
+                    setupRows(episodes, favorites)
                     episodesLoaded = true
                 }
             } catch (e: Exception) {
@@ -125,8 +130,8 @@ class MainBrowseFragment : BrowseSupportFragment() {
         }
     }
 
-    private fun setupRows(episodes: List<Episode>) {
-        Log.d(TAG, "setupRows with ${episodes.size} episodes")
+    private fun setupRows(episodes: List<Episode>, favorites: List<Series> = emptyList()) {
+        Log.d(TAG, "setupRows with ${episodes.size} episodes, ${favorites.size} favorites")
         val episodePresenter = EpisodeCardPresenter()
 
         val mainAdapter = ArrayObjectAdapter(episodePresenter)
@@ -141,6 +146,14 @@ class MainBrowseFragment : BrowseSupportFragment() {
             val olderAdapter = ArrayObjectAdapter(episodePresenter)
             episodes.drop(5).forEach { olderAdapter.add(it) }
             rowsAdapter.add(ListRow(HeaderItem(2, "Ещё"), olderAdapter))
+        }
+
+        // Избранное row (favorite series)
+        if (favorites.isNotEmpty()) {
+            val seriesPresenter = SeriesCardPresenter()
+            val favAdapter = ArrayObjectAdapter(seriesPresenter)
+            favorites.forEach { favAdapter.add(it) }
+            rowsAdapter.add(ListRow(HeaderItem(3, "Избранное"), favAdapter))
         }
 
         // Settings row
@@ -174,6 +187,12 @@ class MainBrowseFragment : BrowseSupportFragment() {
             .replace(R.id.browse_container, detailFragment)
             .addToBackStack(null)
             .commitAllowingStateLoss()
+    }
+
+    private fun onSeriesClicked(series: Series) {
+        val intent = android.content.Intent(requireContext(), ru.twicker.lostfilmtv.SerieActivity::class.java)
+        intent.putExtra("series", series)
+        startActivity(intent)
     }
 
     private fun onSettingsClicked() {
