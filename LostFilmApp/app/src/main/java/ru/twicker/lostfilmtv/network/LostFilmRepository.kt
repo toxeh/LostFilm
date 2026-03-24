@@ -64,71 +64,72 @@ class LostFilmRepository {
      */
     suspend fun getFavoriteSeries(client: OkHttpClient): List<Series> = withContext(Dispatchers.IO) {
         try {
-            val url = "https://${NetworkClient.getHost()}/series/?type=search&s=3&t=99"
-            Log.d(TAG, "getFavoriteSeries: fetching $url")
+            val allResults = mutableListOf<Series>()
             
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", NetworkClient.UA)
-                .build()
-            
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "getFavoriteSeries HTTP ${response.code}")
-                return@withContext emptyList()
+            // Fetch both favorite series and favorite movies
+            for ((urlPath, linkPrefix) in listOf("/series/" to "/series/", "/movies/" to "/movies/")) {
+                val url = "https://${NetworkClient.getHost()}${urlPath}?type=search&s=3&t=99"
+                Log.d(TAG, "getFavorites: fetching $url")
+                
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", NetworkClient.UA)
+                    .build()
+                
+                val response = try { client.newCall(request).execute() } catch (e: Exception) {
+                    Log.e(TAG, "getFavorites failed for $urlPath", e)
+                    continue
+                }
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "getFavorites HTTP ${response.code} for $urlPath")
+                    continue
+                }
+                
+                val html = response.body?.string() ?: continue
+                Log.d(TAG, "getFavorites($urlPath): got ${html.length} chars")
+                
+                val doc = Jsoup.parse(html)
+                
+                val links = doc.select("a.no-decoration[href^=$linkPrefix]")
+                Log.d(TAG, "getFavorites($urlPath): found ${links.size} links")
+                
+                val seen = mutableSetOf<String>()
+                for (link in links) {
+                    val href = link.attr("href")
+                    val match = Regex("(?:/series/|/movies/)([^/]+)").find(href) ?: continue
+                    val slug = match.groupValues[1]
+                    if (slug in seen) continue
+                    seen.add(slug)
+                    
+                    val img = link.selectFirst("img.thumb")
+                    val posterSrc = img?.attr("src") ?: ""
+                    val posterUrl = if (posterSrc.isNotBlank()) {
+                        if (posterSrc.startsWith("//")) "https:$posterSrc"
+                        else if (posterSrc.startsWith("/")) "https://${NetworkClient.getHost()}$posterSrc"
+                        else posterSrc
+                    } else ""
+                    
+                    val parent = link.parent()
+                    val titleRu = parent?.selectFirst(".name-ru")?.text()?.trim() ?: ""
+                    val titleEn = parent?.selectFirst(".name-en")?.text()?.trim() ?: ""
+                    
+                    if (titleRu.isBlank() && titleEn.isBlank()) continue
+                    
+                    allResults.add(Series(
+                        title = if (titleEn.isNotBlank()) titleEn else slug.replace("_", " "),
+                        titleRu = if (titleRu.isNotBlank()) titleRu else slug.replace("_", " "),
+                        link = "$linkPrefix$slug/",
+                        poster = posterUrl,
+                        genres = "",
+                        year = ""
+                    ))
+                }
             }
             
-            val html = response.body?.string() ?: return@withContext emptyList()
-            Log.d(TAG, "getFavoriteSeries: got ${html.length} chars")
-            
-            val doc = Jsoup.parse(html)
-            val results = mutableListOf<Series>()
-            
-            // Page has: <a href="/series/Slug" class="no-decoration">
-            //             <img src="/Static/Images/XXX/Posters/image.jpg" class="thumb">
-            //           </a>
-            // And nearby: <div class="name-ru">Название</div> <div class="name-en">Title</div>
-            val links = doc.select("a.no-decoration[href^=/series/]")
-            Log.d(TAG, "getFavoriteSeries: found ${links.size} series links")
-            
-            val seen = mutableSetOf<String>()
-            for (link in links) {
-                val href = link.attr("href")
-                val match = Regex("/series/([^/]+)").find(href) ?: continue
-                val seriesSlug = match.groupValues[1]
-                if (seriesSlug in seen) continue
-                seen.add(seriesSlug)
-                
-                // Poster from img.thumb inside the link
-                val img = link.selectFirst("img.thumb")
-                val posterSrc = img?.attr("src") ?: ""
-                val posterUrl = if (posterSrc.isNotBlank()) {
-                    if (posterSrc.startsWith("//")) "https:$posterSrc"
-                    else if (posterSrc.startsWith("/")) "https://${NetworkClient.getHost()}$posterSrc"
-                    else posterSrc
-                } else ""
-                
-                // Title from sibling or parent
-                val parent = link.parent()
-                val titleRu = parent?.selectFirst(".name-ru")?.text()?.trim() ?: ""
-                val titleEn = parent?.selectFirst(".name-en")?.text()?.trim() ?: ""
-                
-                if (titleRu.isBlank() && titleEn.isBlank()) continue
-                
-                results.add(Series(
-                    title = if (titleEn.isNotBlank()) titleEn else seriesSlug.replace("_", " "),
-                    titleRu = if (titleRu.isNotBlank()) titleRu else seriesSlug.replace("_", " "),
-                    link = "/series/$seriesSlug/",
-                    poster = posterUrl,
-                    genres = "",
-                    year = ""
-                ))
-            }
-            
-            Log.d(TAG, "getFavoriteSeries: parsed ${results.size} series")
-            results
+            Log.d(TAG, "getFavorites: total ${allResults.size} items")
+            allResults
         } catch (e: Exception) {
-            Log.e(TAG, "getFavoriteSeries failed", e)
+            Log.e(TAG, "getFavorites failed", e)
             emptyList()
         }
     }
@@ -185,6 +186,8 @@ class LostFilmRepository {
             val rows = doc.select("tr")
             val seasonMap = mutableMapOf<String, MutableList<Episode>>()
             var seriesId = ""
+            // Map data-episode → Episode for watched matching
+            val dataEpMap = mutableMapOf<String, Episode>()
             
             for (row in rows) {
                 val btn = row.selectFirst(".haveseen-btn") ?: continue
@@ -194,8 +197,7 @@ class LostFilmRepository {
                 
                 val code = btn.attr("data-code") // e.g. "868-1-1"
                 if (code.isBlank()) continue
-                
-                val isWatched = btn.hasClass("checked")
+                val dataEpisode = btn.attr("data-episode") // e.g. "1097001004"
                 
                 var detailsUrl = beta.attr("onClick")
                 if (detailsUrl != null) {
@@ -229,11 +231,61 @@ class LostFilmRepository {
                     detailsUrl = detailsUrl,
                     imageUrl = imageUrl,
                     episodeCode = code,
-                    isWatched = isWatched
+                    isWatched = false // will be set from getmarks
                 )
                 
+                if (dataEpisode.isNotBlank()) dataEpMap[dataEpisode] = ep
                 val seasonName = if (codeParts.size >= 2) "${codeParts[1]} сезон" else "Сезон"
                 seasonMap.getOrPut(seasonName) { mutableListOf() }.add(ep)
+            }
+            
+            // Fetch watched marks via AJAX and update episodes
+            if (seriesId.isNotBlank() && dataEpMap.isNotEmpty()) {
+                val watchedIds = getWatchedMarks(client, seriesId)
+                Log.d(TAG, "getSeriesDetails: getmarks returned ${watchedIds.size} watched IDs for series $seriesId")
+                for (id in watchedIds) {
+                    dataEpMap[id]?.isWatched = true
+                }
+            }
+            Log.d(TAG, "getSeriesDetails: parsed ${seasonMap.values.sumOf { it.size }} episodes, ${dataEpMap.values.count { it.isWatched }} watched")
+            
+            // Extract seriesId from FollowSerial(id, ...) if not parsed from episodes (e.g. movies)
+            val favBtn = doc.selectFirst(".favorites-btn, .favorites-btn2")
+            val favOnClick = favBtn?.attr("onClick") ?: ""
+            if (seriesId.isBlank() && favOnClick.contains("FollowSerial")) {
+                seriesId = Regex("FollowSerial\\((\\d+)").find(favOnClick)?.groupValues?.get(1) ?: ""
+            }
+            
+            // For movies: no episodes from <tr>, create a single entry from .isawthat-btn
+            if (seasonMap.isEmpty()) {
+                val isawthat = doc.selectFirst(".isawthat-btn")
+                val dataEp = isawthat?.attr("data-episode") ?: ""
+                // Construct detailsUrl from base path (e.g. /movies/Dune/)
+                val movieDetailsUrl = baseSeriesPath
+                
+                // Use movie poster for the card image
+                val moviePosterUrl = if (seriesId.isNotBlank()) {
+                    "https://${NetworkClient.getImageHost()}/Static/Images/$seriesId/Posters/poster.jpg"
+                } else ""
+                
+                val movieEp = Episode(
+                    title = titleRu.ifBlank { titleEn },
+                    titleEn = titleEn,
+                    episodeInfo = "Фильм",
+                    date = "",
+                    detailsUrl = movieDetailsUrl,
+                    imageUrl = moviePosterUrl,
+                    episodeCode = if (seriesId.isNotBlank()) "$seriesId-1-1" else "",
+                    isWatched = false
+                )
+                // Check watched status for the movie
+                if (dataEp.isNotBlank() && seriesId.isNotBlank()) {
+                    val watchedIds = getWatchedMarks(client, seriesId)
+                    if (dataEp in watchedIds) movieEp.isWatched = true
+                    dataEpMap[dataEp] = movieEp
+                }
+                seasonMap["Фильм"] = mutableListOf(movieEp)
+                Log.d(TAG, "Created movie episode: ${movieEp.title} code=${movieEp.episodeCode} watched=${movieEp.isWatched}")
             }
             
             // Parse poster from itemprop=image (e.g. /Static/Images/1097/Posters/poster.jpg)
@@ -245,11 +297,9 @@ class LostFilmRepository {
                 posterUrl = "https://${NetworkClient.getImageHost()}/Static/Images/$seriesId/Posters/poster.jpg"
             }
             
-            // Parse favorite status from onClick: FollowSerial(id, true) means already favorited
-            val favBtn = doc.selectFirst(".favorites-btn, .favorites-btn2")
-            val favOnClick = favBtn?.attr("onClick") ?: ""
-            // FollowSerial(1097, false) = not favorite; class 'favorites-btn' (not btn2) = is favorite
-            val isFavorite = favBtn?.hasClass("favorites-btn") == true && !favBtn.hasClass("favorites-btn2")
+            // FollowSerial(id, true) means it IS favorited; FollowSerial(id, false) means NOT
+            // CSS class approach doesn't work because it's set by JS on the client
+            val isFavorite = favOnClick.contains(Regex("FollowSerial\\(\\d+,\\s*true"))
             
             // Parse session token from inline JS: UserData.session = '...'
             val sessionToken = Regex("UserData\\.session\\s*=\\s*['\"]([^'\"]+)").find(html)?.groupValues?.get(1) ?: ""
@@ -549,6 +599,37 @@ class LostFilmRepository {
         val dataEpisode: String = "",
         val sessionToken: String = ""
     )
+
+    /** Fetch list of watched episode data-episode IDs via ajaxik.php.
+     *  Response: {"data":["1097001004","1097001001"]} */
+    private suspend fun getWatchedMarks(client: okhttp3.OkHttpClient, seriesId: String): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://${NetworkClient.getHost()}/ajaxik.php"
+            val body = okhttp3.FormBody.Builder()
+                .add("act", "serial")
+                .add("type", "getmarks")
+                .add("id", seriesId)
+                .build()
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .post(body)
+                .header("User-Agent", NetworkClient.UA)
+                .header("Referer", "https://${NetworkClient.getHost()}/")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .build()
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            Log.d(TAG, "getWatchedMarks(series=$seriesId) → HTTP ${response.code} body=${responseBody.take(200)}")
+            if (!response.isSuccessful) return@withContext emptyList()
+            // Parse {"data":["1097001004","1097001001"]}
+            val jsonObj = org.json.JSONObject(responseBody)
+            val dataArr = jsonObj.optJSONArray("data") ?: return@withContext emptyList()
+            (0 until dataArr.length()).map { dataArr.getString(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "getWatchedMarks failed", e)
+            emptyList()
+        }
+    }
 
     /** Set watched status via ajaxik.php */
     suspend fun setWatched(client: okhttp3.OkHttpClient, dataEpisode: String, sessionToken: String, watched: Boolean): Boolean = withContext(Dispatchers.IO) {

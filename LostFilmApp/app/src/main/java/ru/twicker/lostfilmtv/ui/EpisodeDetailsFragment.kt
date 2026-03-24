@@ -214,10 +214,9 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
         }
         actionAdapter.set(ACTION_WATCHED.toInt(), Action(ACTION_WATCHED, "", "", watchedIcon))
         
-        actionAdapter.set(ACTION_SERIE.toInt(), Action(ACTION_SERIE, "Перейти к сериалу", ""))
-        
-        if (episode.detailsUrl.contains("/season_")) {
-            actionAdapter.set(ACTION_SEASON.toInt(), Action(ACTION_SEASON, "Перейти к сезону", ""))
+        // Don't show "go to series" for movies
+        if (episode.episodeInfo != "Фильм") {
+            actionAdapter.set(ACTION_SERIE.toInt(), Action(ACTION_SERIE, "Перейти к сериалу", ""))
         }
         detailsRow.actionsAdapter = actionAdapter
     }

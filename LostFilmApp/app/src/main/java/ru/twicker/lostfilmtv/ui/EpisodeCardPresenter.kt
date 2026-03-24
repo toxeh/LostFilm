@@ -2,26 +2,39 @@ package ru.twicker.lostfilmtv.ui
 
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
+import androidx.core.content.ContextCompat
 import androidx.leanback.widget.ImageCardView
 import androidx.leanback.widget.Presenter
 import coil.Coil
 import coil.request.ImageRequest
 import coil.target.Target
 import android.graphics.drawable.Drawable
+import ru.twicker.lostfilmtv.R
 import ru.twicker.lostfilmtv.network.Episode
 
 /**
  * Leanback Presenter for episode cards — based on decompiled EpisodePresenter.java
  * Uses ImageCardView (standard Leanback card with image + title + content)
+ * with a watched eye icon overlay in top-right corner when episode is watched.
  */
 class EpisodeCardPresenter(
     private val imageHost: String = "https://lostfilm.tv"
 ) : Presenter() {
 
+    /** Holder that keeps reference to the overlay icon */
+    class EpisodeViewHolder(
+        val wrapper: FrameLayout,
+        val card: ImageCardView,
+        val watchedIcon: ImageView
+    ) : ViewHolder(wrapper)
+
     override fun onCreateViewHolder(parent: ViewGroup): ViewHolder {
-        val card = ImageCardView(parent.context).apply {
+        val ctx = parent.context
+        val card = ImageCardView(ctx).apply {
             isFocusable = true
             isFocusableInTouchMode = false
             setCardType(ImageCardView.CARD_TYPE_INFO_UNDER_WITH_EXTRA)
@@ -30,12 +43,37 @@ class EpisodeCardPresenter(
             setMainImageDimensions(CARD_WIDTH, CARD_HEIGHT)
             mainImageView?.scaleType = ImageView.ScaleType.FIT_XY
         }
-        return ViewHolder(card)
+
+        // Watched eye icon in top-right corner
+        val watchedIcon = ImageView(ctx).apply {
+            setImageDrawable(ContextCompat.getDrawable(ctx, R.drawable.ic_watched)?.mutate()?.also {
+                it.setTint(Color.parseColor("#CC745ec5"))
+            })
+            visibility = ImageView.GONE
+        }
+        val iconSize = (24 * ctx.resources.displayMetrics.density).toInt()
+        val iconMargin = (6 * ctx.resources.displayMetrics.density).toInt()
+        val iconParams = FrameLayout.LayoutParams(iconSize, iconSize).apply {
+            gravity = Gravity.TOP or Gravity.END
+            setMargins(0, iconMargin, iconMargin, 0)
+        }
+
+        val wrapper = FrameLayout(ctx).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            addView(card)
+            addView(watchedIcon, iconParams)
+        }
+
+        return EpisodeViewHolder(wrapper, card, watchedIcon)
     }
 
     override fun onBindViewHolder(viewHolder: ViewHolder, item: Any?) {
         val episode = item as? Episode ?: return
-        val card = viewHolder.view as ImageCardView
+        val holder = viewHolder as EpisodeViewHolder
+        val card = holder.card
 
         card.titleText = episode.title
         card.contentText = buildString {
@@ -46,6 +84,9 @@ class EpisodeCardPresenter(
             }
         }
         card.setMainImageDimensions(CARD_WIDTH, CARD_HEIGHT)
+
+        // Show/hide watched icon
+        holder.watchedIcon.visibility = if (episode.isWatched) ImageView.VISIBLE else ImageView.GONE
 
         // Load poster via Coil with ciadpi proxy
         val imageUrl = episode.imageUrl
@@ -75,8 +116,9 @@ class EpisodeCardPresenter(
     }
 
     override fun onUnbindViewHolder(viewHolder: ViewHolder) {
-        val card = viewHolder.view as ImageCardView
-        card.mainImage = ColorDrawable(Color.DKGRAY)
+        val holder = viewHolder as EpisodeViewHolder
+        holder.card.mainImage = ColorDrawable(Color.DKGRAY)
+        holder.watchedIcon.visibility = ImageView.GONE
     }
 
     companion object {
@@ -85,3 +127,4 @@ class EpisodeCardPresenter(
         const val CARD_HEIGHT = 176
     }
 }
+

@@ -25,6 +25,8 @@ class SerieDetailsFragment : DetailsSupportFragment() {
     companion object {
         private const val TAG = "SerieDetails"
         private const val ACTION_FAVORITE = 1L
+        private const val ACTION_WATCH_MOVIE = 10L
+        private const val ACTION_WATCHED_MOVIE = 11L
 
         fun newInstance(series: Series): SerieDetailsFragment {
             val fragment = SerieDetailsFragment()
@@ -42,6 +44,7 @@ class SerieDetailsFragment : DetailsSupportFragment() {
     private var isFavorite = false
     private var seriesId = ""
     private var sessionToken = ""
+    private var movieEpisode: Episode? = null  // non-null for movies
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +83,8 @@ class SerieDetailsFragment : DetailsSupportFragment() {
             when {
                 item is Episode -> onEpisodeClicked(item)
                 item is Action && item.id == ACTION_FAVORITE -> onFavoriteClicked(row)
+                item is Action && item.id == ACTION_WATCH_MOVIE -> onWatchMovieClicked()
+                item is Action && item.id == ACTION_WATCHED_MOVIE -> onWatchedMovieClicked(row)
             }
         }
     }
@@ -115,6 +120,17 @@ class SerieDetailsFragment : DetailsSupportFragment() {
         val detailsRow = DetailsOverviewRow(details)
 
         val actionAdapter = SparseArrayObjectAdapter()
+        
+        // Check if this is a movie (single episode in "Фильм" season)
+        val isMovie = details.seasons.size == 1 && details.seasons.containsKey("Фильм")
+        if (isMovie) {
+            movieEpisode = details.seasons["Фильм"]?.firstOrNull()
+            // Add Watch button
+            actionAdapter.set(ACTION_WATCH_MOVIE.toInt(), Action(ACTION_WATCH_MOVIE, "Смотреть", ""))
+            // Add Watched toggle
+            updateWatchedMovieAction(actionAdapter)
+        }
+        
         updateFavoriteAction(actionAdapter)
         detailsRow.actionsAdapter = actionAdapter
 
@@ -170,19 +186,32 @@ class SerieDetailsFragment : DetailsSupportFragment() {
             }
         }
 
-        // Seasons rows
-        val episodePresenter = EpisodeCardPresenter()
-        var idCounter = 100L
-        for ((seasonName, episodes) in details.seasons) {
-            val rowItemsAdapter = ArrayObjectAdapter(episodePresenter)
-            episodes.reversed().forEach { rowItemsAdapter.add(it) }
-            rowAdapter.add(ListRow(HeaderItem(idCounter++, seasonName), rowItemsAdapter))
+        // Seasons rows (skip for movies — already handled via action bar)
+        if (!isMovie) {
+            val episodePresenter = EpisodeCardPresenter()
+            var idCounter = 100L
+            for ((seasonName, episodes) in details.seasons) {
+                val rowItemsAdapter = ArrayObjectAdapter(episodePresenter)
+                episodes.reversed().forEach { rowItemsAdapter.add(it) }
+                rowAdapter.add(ListRow(HeaderItem(idCounter++, seasonName), rowItemsAdapter))
+            }
         }
     }
 
     private fun updateFavoriteAction(actionAdapter: SparseArrayObjectAdapter) {
         val label = if (isFavorite) "★ В избранном" else "☆ В избранное"
         actionAdapter.set(ACTION_FAVORITE.toInt(), Action(ACTION_FAVORITE, label, ""))
+    }
+    
+    private fun updateWatchedMovieAction(actionAdapter: SparseArrayObjectAdapter) {
+        val ep = movieEpisode ?: return
+        val watchedIcon = androidx.core.content.ContextCompat.getDrawable(requireContext(), R.drawable.ic_watched)?.mutate()
+        if (ep.isWatched) {
+            watchedIcon?.setTint(Color.parseColor("#FF745ec5"))
+        } else {
+            watchedIcon?.setTint(Color.parseColor("#FFCCCCCC"))
+        }
+        actionAdapter.set(ACTION_WATCHED_MOVIE.toInt(), Action(ACTION_WATCHED_MOVIE, "", "", watchedIcon))
     }
 
     private fun onFavoriteClicked(row: Row?) {
@@ -232,5 +261,43 @@ class SerieDetailsFragment : DetailsSupportFragment() {
             .replace(R.id.browse_container, detailFragment)
             .addToBackStack(null)
             .commitAllowingStateLoss()
+    }
+    
+    private fun onWatchMovieClicked() {
+        val ep = movieEpisode ?: return
+        onEpisodeClicked(ep)
+    }
+    
+    private fun onWatchedMovieClicked(row: Row?) {
+        val c = client ?: return
+        val ep = movieEpisode ?: return
+        val detailsRow = row as? DetailsOverviewRow ?: return
+        val actionAdapter = detailsRow.actionsAdapter as? SparseArrayObjectAdapter ?: return
+        
+        // Optimistic toggle
+        ep.isWatched = !ep.isWatched
+        updateWatchedMovieAction(actionAdapter)
+        
+        // Construct data-episode value: e.g. code "815-1-1" -> "815001001"
+        val parts = ep.episodeCode.split("-")
+        val dataEpisode = if (parts.size == 3) {
+            "${parts[0]}${parts[1].padStart(3, '0')}${parts[2].padStart(3, '0')}"
+        } else ep.episodeCode
+        
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+                try {
+                    repository.setWatched(c, dataEpisode, sessionToken, ep.isWatched)
+                } catch (e: Exception) {
+                    Log.e(TAG, "setWatched failed", e)
+                    false
+                }
+            }
+            if (!ok && isAdded) {
+                ep.isWatched = !ep.isWatched
+                updateWatchedMovieAction(actionAdapter)
+                Toast.makeText(requireContext(), "Ошибка", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 }
