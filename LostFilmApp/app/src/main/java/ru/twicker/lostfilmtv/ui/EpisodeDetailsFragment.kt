@@ -458,6 +458,26 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
                     }
                 }
 
+                // UDP Broadcast .torrent to local network if enabled
+                if (SettingsFragment.isBroadcastEnabled(requireContext())) {
+                    val port = SettingsFragment.getBroadcastPort(requireContext())
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val sock = java.net.DatagramSocket()
+                            sock.broadcast = true
+                            val packet = java.net.DatagramPacket(
+                                torrentBytes, torrentBytes.size,
+                                java.net.InetAddress.getByName("255.255.255.255"), port
+                            )
+                            sock.send(packet)
+                            sock.close()
+                            Log.d(TAG, "Broadcast .torrent (${torrentBytes.size} bytes) to port $port")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Broadcast failed: ${e.message}", e)
+                        }
+                    }
+                }
+
                 val file = java.io.File(requireContext().cacheDir, "download.torrent")
                 file.writeBytes(torrentBytes)
 

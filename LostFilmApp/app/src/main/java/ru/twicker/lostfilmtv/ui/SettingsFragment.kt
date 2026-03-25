@@ -1,5 +1,6 @@
 package ru.twicker.lostfilmtv.ui
 
+import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.leanback.app.GuidedStepSupportFragment
@@ -13,6 +14,7 @@ import ru.twicker.lostfilmtv.network.LostFilmAuth
  * Settings screen (Leanback GuidedStep pattern):
  *  - Logout
  *  - Clear image cache
+ *  - UDP Broadcast toggle + port
  *  - Back
  */
 class SettingsFragment : GuidedStepSupportFragment() {
@@ -21,7 +23,24 @@ class SettingsFragment : GuidedStepSupportFragment() {
         private const val ACTION_LOGOUT      = 1L
         private const val ACTION_CLEAR_CACHE = 2L
         private const val ACTION_RETUNE_DPI  = 4L
+        private const val ACTION_BROADCAST_TOGGLE = 5L
+        private const val ACTION_BROADCAST_PORT   = 6L
         private const val ACTION_BACK        = 3L
+        
+        private const val PREFS_NAME = "lostfilm_settings"
+        private const val KEY_BROADCAST_ENABLED = "broadcast_enabled"
+        private const val KEY_BROADCAST_PORT = "broadcast_port"
+        const val DEFAULT_BROADCAST_PORT = 41000
+        
+        fun isBroadcastEnabled(ctx: Context): Boolean {
+            return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_BROADCAST_ENABLED, false)
+        }
+        
+        fun getBroadcastPort(ctx: Context): Int {
+            return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_BROADCAST_PORT, DEFAULT_BROADCAST_PORT)
+        }
     }
 
     override fun onCreateGuidance(savedInstanceState: Bundle?): Guidance {
@@ -29,9 +48,11 @@ class SettingsFragment : GuidedStepSupportFragment() {
         val strategy = CiadpiTuner.getSavedStrategy(requireContext())?.name ?: "не выбрана"
         val ttl = CiadpiTuner.getSavedTtl(requireContext())
         val ttlStr = if (ttl > 0) " · TTL=$ttl" else ""
+        val bcStatus = if (isBroadcastEnabled(requireContext())) 
+            "вкл (порт ${getBroadcastPort(requireContext())})" else "выкл"
         return Guidance(
             "Настройки",
-            "Кэш: ${cacheKb} КБ · DPI: $strategy$ttlStr",
+            "Кэш: ${cacheKb} КБ · DPI: $strategy$ttlStr · Broadcast: $bcStatus",
             "",
             null
         )
@@ -54,6 +75,20 @@ class SettingsFragment : GuidedStepSupportFragment() {
             .description("Перебрать стратегии и выбрать лучшую")
             .build()
 
+        val bcEnabled = isBroadcastEnabled(requireContext())
+        actions += GuidedAction.Builder(requireContext())
+            .id(ACTION_BROADCAST_TOGGLE)
+            .title("UDP Broadcast торрентов")
+            .description(if (bcEnabled) "Включен" else "Выключен")
+            .build()
+
+        actions += GuidedAction.Builder(requireContext())
+            .id(ACTION_BROADCAST_PORT)
+            .title("Порт broadcast")
+            .description("${getBroadcastPort(requireContext())}")
+            .descriptionEditable(true)
+            .build()
+
         actions += GuidedAction.Builder(requireContext())
             .id(ACTION_BACK)
             .title("Назад")
@@ -64,7 +99,6 @@ class SettingsFragment : GuidedStepSupportFragment() {
         when (action.id) {
             ACTION_LOGOUT -> {
                 LostFilmAuth.logout(requireContext())
-                // Return to login screen
                 requireActivity().finish()
                 startActivity(
                     android.content.Intent(requireContext(), ru.twicker.lostfilmtv.MainActivity::class.java)
@@ -74,10 +108,7 @@ class SettingsFragment : GuidedStepSupportFragment() {
                 val sizeMb = "%.1f".format(ImageCache.totalSizeBytes(requireContext()) / 1024f / 1024f)
                 ImageCache.clear(requireContext())
                 Toast.makeText(requireContext(), "Кэш очищен (было ${sizeMb} МБ)", Toast.LENGTH_SHORT).show()
-                // Refresh subtitle
-                fragmentManager?.beginTransaction()
-                    ?.replace(id, SettingsFragment())
-                    ?.commit()
+                refreshFragment()
             }
             ACTION_RETUNE_DPI -> {
                 CiadpiTuner.clearSavedStrategy(requireContext())
@@ -87,7 +118,41 @@ class SettingsFragment : GuidedStepSupportFragment() {
                     android.content.Intent(requireContext(), ru.twicker.lostfilmtv.MainActivity::class.java)
                 )
             }
+            ACTION_BROADCAST_TOGGLE -> {
+                val prefs = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val newVal = !prefs.getBoolean(KEY_BROADCAST_ENABLED, false)
+                prefs.edit().putBoolean(KEY_BROADCAST_ENABLED, newVal).apply()
+                val msg = if (newVal) "Broadcast включен (порт ${getBroadcastPort(requireContext())})" 
+                          else "Broadcast выключен"
+                Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
+                refreshFragment()
+            }
+            ACTION_BROADCAST_PORT -> {
+                // Port is edited via descriptionEditable — handled in onGuidedActionEditedAndProceed
+            }
             ACTION_BACK -> parentFragmentManager.popBackStack()
         }
+    }
+    
+    override fun onGuidedActionEditedAndProceed(action: GuidedAction): Long {
+        if (action.id == ACTION_BROADCAST_PORT) {
+            val portStr = action.description?.toString()?.trim() ?: ""
+            val port = portStr.toIntOrNull()
+            if (port != null && port in 1024..65535) {
+                requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putInt(KEY_BROADCAST_PORT, port).apply()
+                Toast.makeText(requireContext(), "Порт: $port", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(requireContext(), "Некорректный порт (1024-65535)", Toast.LENGTH_SHORT).show()
+                action.description = "${getBroadcastPort(requireContext())}"
+            }
+        }
+        return GuidedAction.ACTION_ID_CURRENT
+    }
+    
+    private fun refreshFragment() {
+        fragmentManager?.beginTransaction()
+            ?.replace(id, SettingsFragment())
+            ?.commit()
     }
 }
