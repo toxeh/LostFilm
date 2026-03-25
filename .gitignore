@@ -7,3 +7,9 @@ byedpi-*.tar.gz
 ciadpi-aarch64
 ciadpi-armv7l
 tls_split_test.py
+tmp/
+.DS_Store
+.agent/
+_bmad/
+*.pyc
+LostFilmApp/*.py
