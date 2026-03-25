@@ -18,12 +18,51 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        
+        // Only ARM architectures (Android TV is ARM-only in practice)
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
+    }
+
+    // Per-ABI APKs + universal
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            isUniversalApk = true  // fat APK with all ABIs
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            // Use env vars or local keystore
+            val ksFile = file("keystore.jks")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "lostfilm"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            isDebuggable = true
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            val ksFile = file("keystore.jks")
+            if (ksFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // fallback to debug signing for dev builds
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
