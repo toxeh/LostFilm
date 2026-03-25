@@ -36,7 +36,7 @@
   </tr>
   <tr>
     <td><img src="screenshots/movie_details.png" width="400" alt="Фильм Дюна"/><br/><b>Страница фильма</b></td>
-    <td><img src="screenshots/login.png" width="400" alt="Авторизация"/><br/><b>Авторизация</b></td>
+    <td><img src="screenshots/login.png" width="400" alt="Навигация"/><br/><b>Навигация и меню</b></td>
   </tr>
 </table>
 
