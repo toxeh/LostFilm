@@ -13,3 +13,4 @@ tmp/
 _bmad/
 *.pyc
 LostFilmApp/*.py
+keystore.jks
