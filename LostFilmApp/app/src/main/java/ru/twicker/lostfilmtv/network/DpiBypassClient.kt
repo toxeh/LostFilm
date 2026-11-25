@@ -269,6 +269,25 @@ object NetworkClient {
             .build()
     }
 
+    /**
+     * Smart client that auto-selects:
+     *  - ciadpi/JavaDpiProxy SOCKS5 if running (DPI bypass active)
+     *  - Direct with system DNS if no proxy needed
+     */
+    fun createSmartClient(cookieJar: okhttp3.CookieJar = okhttp3.CookieJar.NO_COOKIES): OkHttpClient {
+        if (CiadpiRunner.isRunning() || JavaDpiProxy.isRunning()) {
+            return createCiadpiClient(cookieJar)
+        }
+        // Direct mode — system DNS, no proxy
+        return OkHttpClient.Builder()
+            .cookieJar(cookieJar)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", UA).build()) }
+            .addInterceptor(loggingInterceptor())
+            .build()
+    }
+
 
 
     val okHttpClient: OkHttpClient by lazy { createV6Client() }

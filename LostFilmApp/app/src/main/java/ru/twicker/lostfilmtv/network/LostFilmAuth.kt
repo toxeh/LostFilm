@@ -49,6 +49,32 @@ object LostFilmAuth {
         fun clear() { cookies.clear(); persist() }
         fun clearSession() { cookies.removeAll { it.name == "PHPSESSID" }; persist() }
 
+        /** Export all cookies as pipe-delimited string. */
+        fun exportAll(): String = cookies.joinToString("|") { c ->
+            "${c.name}=${c.value};domain=${c.domain};path=${c.path}"
+        }
+
+        /** Import cookies from pipe-delimited string, replacing current session. */
+        fun importAll(encoded: String) {
+            cookies.clear()
+            if (encoded.isBlank()) return
+            for (part in encoded.split("|")) {
+                try {
+                    val kv = part.split(";")
+                    val (name, value) = kv[0].split("=", limit = 2)
+                    val domain = kv.firstOrNull { it.startsWith("domain=") }?.removePrefix("domain=") ?: ".lostfilm.tv"
+                    val path   = kv.firstOrNull { it.startsWith("path=")   }?.removePrefix("path=")   ?: "/"
+                    val cookie = Cookie.Builder()
+                        .name(name).value(value)
+                        .domain(domain.trimStart('.')).path(path)
+                        .build()
+                    cookies.add(cookie)
+                } catch (_: Exception) {}
+            }
+            persist()
+            Log.d(TAG, "importAll: loaded ${cookies.size} cookies")
+        }
+
         private fun persist() {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val encoded = cookies.joinToString("|") { c ->
@@ -87,6 +113,22 @@ object LostFilmAuth {
     }
 
     fun hasSession(context: Context) = cookieJar(context).hasSession()
+
+    /** Export current cookies as pipe-delimited string for LAN transfer. */
+    fun exportCookies(context: Context): String {
+        val jar = cookieJar(context)
+        return jar.exportAll()
+    }
+
+    /**
+     * Import cookies from pipe-delimited string (received via LAN).
+     * Replaces current session with the imported cookies.
+     */
+    fun importCookies(context: Context, encoded: String) {
+        val jar = cookieJar(context)
+        jar.importAll(encoded)
+        Log.d(TAG, "Imported cookies from LAN (${encoded.length} chars)")
+    }
 
     /** Save credentials to SharedPreferences (plain text — acceptable for media app) */
     fun saveCredentials(context: Context, email: String, password: String) {

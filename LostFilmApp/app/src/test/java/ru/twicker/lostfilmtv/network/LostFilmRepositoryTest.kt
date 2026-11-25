@@ -361,4 +361,74 @@ class LostFilmRepositoryTest {
         val result = org.json.JSONObject(json).optString("result", "")
         assertEquals("off", result)
     }
+
+    // --- Series description parsing tests ---
+
+    @Test
+    fun `resolveSeriesDescription prefers main page itemprop description over seasons meta`() {
+        val mainHtml = """
+            <html>
+            <head><meta name="description" content="Сериал 12 12 12: гид по сериям..."></head>
+            <body>
+                <div class="text-block description">
+                    <h2>Описание</h2>
+                    <div class="hor-spacer4"></div>
+                    <div class="body">
+                        <div class="body" itemprop="description">«12 12 12» — триллер от Apple TV, созданный <a class="bb" href="/persons/Jim_Keeble">Джимом Киблом</a>.
+                        <br />&nbsp;<br />
+                        <strong class="bb">Сюжет</strong><br />
+                        Пол Гэлвин (<a class="bb" href="/persons/Jamie_Dornan">Джейми Дорнан</a>) когда-то был вором.</div>
+                    </div>
+                </div>
+            </body>
+            </html>
+        """.trimIndent()
+        val seasonsHtml = """
+            <html>
+            <head><meta name="description" content="Сериал 12 12 12 (12 12 12): гид по сериям, все сезоны и эпизоды"></head>
+            <body><h1 class="title-ru">12 12 12</h1></body>
+            </html>
+        """.trimIndent()
+
+        val desc = repository.resolveSeriesDescription(
+            org.jsoup.Jsoup.parse(mainHtml),
+            org.jsoup.Jsoup.parse(seasonsHtml)
+        )
+
+        assertTrue(desc.startsWith("«12 12 12» — триллер от Apple TV, созданный Джимом Киблом."))
+        assertTrue(desc.contains("\n\nСюжет\nПол Гэлвин (Джейми Дорнан) когда-то был вором."))
+        assertFalse(desc.contains("гид по сериям"))
+    }
+
+    @Test
+    fun `extractDescription parses movie page description without itemprop`() {
+        val movieHtml = """
+            <div class="text-block description">
+                <div class="spoiler-warning">Осторожно, возможны спойлеры!</div>
+                <h2>Описание</h2>
+                <div class="body">
+                    <div class="body" style="height:20px;overflow:hidden">«Дюна» <a class="bb" href="/persons/Denis_Villeneuve">Дени Вильнёва</a> — настоящая веха.</div>
+                </div>
+            </div>
+        """.trimIndent()
+
+        val desc = repository.extractDescription(org.jsoup.Jsoup.parse(movieHtml))
+        assertEquals("«Дюна» Дени Вильнёва — настоящая веха.", desc)
+    }
+
+    @Test
+    fun `resolveSeriesDescription falls back to meta description when main page unavailable`() {
+        val seasonsHtml = """
+            <html>
+            <head><meta name="description" content="Сериал 12 12 12: гид по сериям"></head>
+            <body><h1 class="title-ru">12 12 12</h1></body>
+            </html>
+        """.trimIndent()
+
+        val desc = repository.resolveSeriesDescription(
+            mainDoc = null,
+            seasonsDoc = org.jsoup.Jsoup.parse(seasonsHtml)
+        )
+        assertEquals("Сериал 12 12 12: гид по сериям", desc)
+    }
 }

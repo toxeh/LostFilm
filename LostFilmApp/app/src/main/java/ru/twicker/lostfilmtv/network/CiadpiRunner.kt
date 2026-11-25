@@ -50,6 +50,37 @@ object CiadpiRunner {
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
 
         return try {
+            val started = tryStart(binFile, cmd)
+            if (started) return true
+
+            // Fallback: copy to filesDir (some Android TV SELinux policies block exec from nativeLibraryDir)
+            val fallbackBin = File(context.filesDir, "ciadpi")
+            binFile.copyTo(fallbackBin, overwrite = true)
+            fallbackBin.setExecutable(true)
+            Log.i(TAG, "Trying fallback exec from ${fallbackBin.absolutePath}")
+            val fallbackCmd = mutableListOf(fallbackBin.absolutePath, "--port", "$port")
+            fallbackCmd.addAll(strategyArgs)
+            val started2 = tryStart(fallbackBin, fallbackCmd)
+            if (started2) return true
+
+            // Native binary completely blocked (seccomp) → fall back to pure Java proxy
+            Log.w(TAG, "Native ciadpi unavailable, starting JavaDpiProxy")
+            val javaOk = JavaDpiProxy.start(NetworkClient.doHDns)
+            if (javaOk) {
+                port = JavaDpiProxy.port
+                Log.i(TAG, "JavaDpiProxy SOCKS5 ready on port $port")
+                return true
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start ciadpi: ${e.message}", e)
+            false
+        }
+    }
+
+    private fun tryStart(binFile: File, cmd: List<String>): Boolean {
+        stop()
+        return try {
             val pb = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
             process = pb.start()
@@ -60,17 +91,20 @@ object CiadpiRunner {
                 catch (_: Exception) {}
             }.apply { isDaemon = true; start() }
 
-            // Wait for the port to open (up to 3 seconds)
-            val ready = waitForPort(port, timeoutMs = 3000)
+            // Wait for the port to open (up to 8 seconds for slow devices)
+            val ready = waitForPort(port, timeoutMs = 8000)
             if (ready) {
                 Log.i(TAG, "ciadpi SOCKS5 ready on port $port")
             } else {
-                Log.e(TAG, "ciadpi did not open port $port in time")
+                // Check if process died
+                val alive = try { process?.exitValue(); false } catch (_: IllegalThreadStateException) { true }
+                val exitCode = try { process?.exitValue() } catch (_: Exception) { null }
+                Log.e(TAG, "ciadpi did not open port $port in time (alive=$alive exitCode=$exitCode bin=${binFile.absolutePath})")
                 stop()
             }
             ready
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start ciadpi: ${e.message}", e)
+            Log.e(TAG, "Failed to start ciadpi from ${binFile.absolutePath}: ${e.message}", e)
             false
         }
     }
@@ -81,6 +115,7 @@ object CiadpiRunner {
             it.destroyForcibly()
         }
         process = null
+        JavaDpiProxy.stop()
     }
 
     fun isRunning(): Boolean {

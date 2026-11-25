@@ -27,7 +27,7 @@ object CoilFactory {
 
     private fun buildImageLoader(context: Context): ImageLoader {
         val cookieJar = LostFilmAuth.cookieJar(context)
-        val baseClient = NetworkClient.createCiadpiClient(cookieJar)
+        val baseClient = NetworkClient.createSmartClient(cookieJar)
 
         val dispatcher = Dispatcher().apply {
             maxRequests = 4

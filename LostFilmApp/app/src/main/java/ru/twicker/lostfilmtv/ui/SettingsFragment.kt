@@ -26,11 +26,14 @@ class SettingsFragment : GuidedStepSupportFragment() {
         private const val ACTION_BROADCAST_TOGGLE = 5L
         private const val ACTION_BROADCAST_PORT   = 6L
         private const val ACTION_BACK        = 3L
+        private const val ACTION_AUTH_PORT    = 7L
         
         private const val PREFS_NAME = "lostfilm_settings"
         private const val KEY_BROADCAST_ENABLED = "broadcast_enabled"
         private const val KEY_BROADCAST_PORT = "broadcast_port"
         const val DEFAULT_BROADCAST_PORT = 41000
+        private const val KEY_AUTH_BROADCAST_PORT = "auth_broadcast_port"
+        const val DEFAULT_AUTH_BROADCAST_PORT = 41001
         
         fun isBroadcastEnabled(ctx: Context): Boolean {
             return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -40,6 +43,11 @@ class SettingsFragment : GuidedStepSupportFragment() {
         fun getBroadcastPort(ctx: Context): Int {
             return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getInt(KEY_BROADCAST_PORT, DEFAULT_BROADCAST_PORT)
+        }
+        
+        fun getAuthBroadcastPort(ctx: Context): Int {
+            return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_AUTH_BROADCAST_PORT, DEFAULT_AUTH_BROADCAST_PORT)
         }
     }
 
@@ -90,6 +98,13 @@ class SettingsFragment : GuidedStepSupportFragment() {
             .build()
 
         actions += GuidedAction.Builder(requireContext())
+            .id(ACTION_AUTH_PORT)
+            .title("Порт авторизации по LAN")
+            .description("${getAuthBroadcastPort(requireContext())}")
+            .descriptionEditable(true)
+            .build()
+
+        actions += GuidedAction.Builder(requireContext())
             .id(ACTION_BACK)
             .title("Назад")
             .build()
@@ -130,21 +145,36 @@ class SettingsFragment : GuidedStepSupportFragment() {
             ACTION_BROADCAST_PORT -> {
                 // Port is edited via descriptionEditable — handled in onGuidedActionEditedAndProceed
             }
+            ACTION_AUTH_PORT -> {
+                // Port is edited via descriptionEditable — handled in onGuidedActionEditedAndProceed
+            }
             ACTION_BACK -> parentFragmentManager.popBackStack()
         }
     }
     
     override fun onGuidedActionEditedAndProceed(action: GuidedAction): Long {
-        if (action.id == ACTION_BROADCAST_PORT) {
-            val portStr = action.description?.toString()?.trim() ?: ""
-            val port = portStr.toIntOrNull()
-            if (port != null && port in 1024..65535) {
-                requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .edit().putInt(KEY_BROADCAST_PORT, port).apply()
-                Toast.makeText(requireContext(), "Порт: $port", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(requireContext(), "Некорректный порт (1024-65535)", Toast.LENGTH_SHORT).show()
-                action.description = "${getBroadcastPort(requireContext())}"
+        val portStr = action.description?.toString()?.trim() ?: ""
+        val port = portStr.toIntOrNull()
+        when (action.id) {
+            ACTION_BROADCAST_PORT -> {
+                if (port != null && port in 1024..65535) {
+                    requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putInt(KEY_BROADCAST_PORT, port).apply()
+                    Toast.makeText(requireContext(), "Порт: $port", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(requireContext(), "Некорректный порт (1024-65535)", Toast.LENGTH_SHORT).show()
+                    action.description = "${getBroadcastPort(requireContext())}"
+                }
+            }
+            ACTION_AUTH_PORT -> {
+                if (port != null && port in 1024..65535) {
+                    requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putInt(KEY_AUTH_BROADCAST_PORT, port).apply()
+                    Toast.makeText(requireContext(), "Порт авторизации: $port", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(requireContext(), "Некорректный порт (1024-65535)", Toast.LENGTH_SHORT).show()
+                    action.description = "${getAuthBroadcastPort(requireContext())}"
+                }
             }
         }
         return GuidedAction.ACTION_ID_CURRENT

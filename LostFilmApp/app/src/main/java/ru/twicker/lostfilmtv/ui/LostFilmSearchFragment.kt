@@ -55,7 +55,7 @@ class LostFilmSearchFragment : SearchSupportFragment(), SearchSupportFragment.Se
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
-        client = NetworkClient.createCiadpiClient(cookieJar)
+        client = NetworkClient.createSmartClient(cookieJar)
 
         // Request mic permission for voice search
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO)

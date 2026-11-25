@@ -61,7 +61,7 @@ class SerieDetailsFragment : DetailsSupportFragment() {
         bgManager.color = 0xFF1B1C2A.toInt()
 
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
-        client = NetworkClient.createCiadpiClient(cookieJar)
+        client = NetworkClient.createSmartClient(cookieJar)
 
         setupUIElements()
         loadSeriesData()
@@ -163,7 +163,7 @@ class SerieDetailsFragment : DetailsSupportFragment() {
                 rowAdapter.notifyArrayItemRangeChanged(0, 1)
             }
 
-            val imgClient = client ?: NetworkClient.createCiadpiClient(LostFilmAuth.cookieJar(requireContext()))
+            val imgClient = client ?: NetworkClient.createSmartClient(LostFilmAuth.cookieJar(requireContext()))
             ImageDownloadQueue.init(requireContext(), imgClient)
 
             val cached = ImageCache.get(requireContext(), details.posterUrl)

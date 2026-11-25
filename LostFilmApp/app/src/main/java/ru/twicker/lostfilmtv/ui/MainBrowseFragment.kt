@@ -1,5 +1,6 @@
 package ru.twicker.lostfilmtv.ui
 
+import android.app.AlertDialog
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -14,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.twicker.lostfilmtv.R
 import ru.twicker.lostfilmtv.network.*
+import java.net.InetAddress
 
 /**
  * Main Leanback browse fragment — shows episode cards in horizontal rows.
@@ -83,7 +85,10 @@ class MainBrowseFragment : BrowseSupportFragment() {
         }
 
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
-        client = NetworkClient.createCiadpiClient(cookieJar)
+        client = NetworkClient.createSmartClient(cookieJar)
+
+        // Start auth broadcast listener for LAN cookie requests
+        startAuthListener()
 
         // Skip reload on back navigation (preserves focus position)
         if (!episodesLoaded) {
@@ -200,5 +205,43 @@ class MainBrowseFragment : BrowseSupportFragment() {
             .replace(R.id.browse_container, SettingsFragment())
             .addToBackStack(null)
             .commitAllowingStateLoss()
+    }
+
+    // ── Auth Broadcast Listener ──────────────────────────────────────
+
+    private fun startAuthListener() {
+        val port = SettingsFragment.getAuthBroadcastPort(requireContext())
+        AuthBroadcast.startListening(port, lifecycleScope) { senderIp, deviceName ->
+            showAuthConfirmation(senderIp, deviceName, port)
+        }
+        Log.d(TAG, "Auth listener started on port $port")
+    }
+
+    private fun showAuthConfirmation(senderIp: InetAddress, deviceName: String, port: Int) {
+        if (!isAdded) return
+        AlertDialog.Builder(requireContext())
+            .setTitle("Запрос авторизации")
+            .setMessage("Устройство $deviceName (${senderIp.hostAddress}) запрашивает авторизацию.\n\nОтправить сессию и стратегию DPI?")
+            .setPositiveButton("Отправить") { _, _ ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val cookies = LostFilmAuth.exportCookies(requireContext())
+                    val creds = LostFilmAuth.loadCredentials(requireContext())
+                    val ttl = CiadpiTuner.getSavedTtl(requireContext())
+                    val strat = CiadpiTuner.getSavedStrategy(requireContext())
+                    val strategies = CiadpiTuner.buildStrategies(ttl)
+                    val idx = if (strat != null) strategies.indexOfFirst { it.name == strat.name } else -1
+                    AuthBroadcast.sendSession(senderIp, port, ttl, idx, creds?.first ?: "", creds?.second ?: "", cookies)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(requireContext(), "Авторизация отправлена на $deviceName", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Отклонить", null)
+            .show()
+    }
+
+    override fun onDestroyView() {
+        AuthBroadcast.stopListening()
+        super.onDestroyView()
     }
 }

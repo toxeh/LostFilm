@@ -2,11 +2,15 @@ package ru.twicker.lostfilmtv.network
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.TextNode
 
 private const val TAG = "LFRepository"
 
@@ -146,42 +150,61 @@ class LostFilmRepository {
         val parts = path.split("/").filter { it.isNotBlank() }
         // parts: ["series", "The_Pitt", "season_2", "episode_11"] or ["series", "The_Pitt"]
         val baseSeriesPath = if (parts.size >= 2) "/${parts[0]}/${parts[1]}/" else path
-        
-        // Single request: fetch /seasons/ page which has both titles and episode list
-        val seasonsUrl = "https://${NetworkClient.getHost()}${baseSeriesPath}seasons/"
-        Log.d(TAG, "getSeriesDetails: input=$seriesUrl → seasonsUrl=$seasonsUrl")
-        
+        val isMoviePath = parts.firstOrNull() == "movies"
+
+        val mainUrl = "https://${NetworkClient.getHost()}$baseSeriesPath"
+        val seasonsUrl = if (isMoviePath) mainUrl else "https://${NetworkClient.getHost()}${baseSeriesPath}seasons/"
+        Log.d(TAG, "getSeriesDetails: input=$seriesUrl → mainUrl=$mainUrl, seasonsUrl=$seasonsUrl")
+
         return withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(seasonsUrl)
-                .header("User-Agent", NetworkClient.UA)
-                .build()
-                
-            val response = try {
-                client.newCall(request).execute()
-            } catch (e: Exception) {
-                Log.e(TAG, "getSeriesDetails failed: $seasonsUrl", e)
-                return@withContext null
+            fun fetchHtml(url: String): String? {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", NetworkClient.UA)
+                    .build()
+                return try {
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            Log.e(TAG, "getSeriesDetails HTTP ${response.code} for $url")
+                            null
+                        } else {
+                            response.body?.string()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "getSeriesDetails failed: $url", e)
+                    null
+                }
             }
-            
-            if (!response.isSuccessful) {
-                Log.e(TAG, "getSeriesDetails HTTP ${response.code}")
-                return@withContext null
+
+            // Fetch /seasons/ (full episode list) and main page (full description + poster) in parallel.
+            // For movies, the main page already contains everything.
+            val (html, mainHtml) = coroutineScope {
+                if (isMoviePath) {
+                    val movieHtml = fetchHtml(mainUrl)
+                    movieHtml to movieHtml
+                } else {
+                    val seasonsDeferred = async { fetchHtml(seasonsUrl) }
+                    val mainDeferred = async { fetchHtml(mainUrl) }
+                    seasonsDeferred.await() to mainDeferred.await()
+                }
             }
-            val html = response.body?.string() ?: return@withContext null
-            Log.d(TAG, "getSeriesDetails: got ${html.length} chars")
-            
+
+            if (html == null) return@withContext null
+            Log.d(TAG, "getSeriesDetails: seasons=${html.length} chars, main=${mainHtml?.length ?: 0} chars")
+
             val doc = Jsoup.parse(html)
-            
-            // Extract title and description from the same page
-            val titleRu = doc.selectFirst("h1.title-ru")?.text() ?: ""
-            val titleEn = doc.selectFirst("h2.title-en")?.text() ?: ""
-            // Try itemprop first, then meta description
-            var description = doc.selectFirst("div[itemprop=description]")?.text()?.trim() ?: ""
-            if (description.isBlank()) {
-                description = doc.selectFirst("meta[name=description]")?.attr("content")?.trim() ?: ""
-            }
-            Log.d(TAG, "Parsed: titleRu=$titleRu, titleEn=$titleEn, desc=${description.take(50)}")
+            val mainDoc = if (mainHtml != null && mainHtml !== html) Jsoup.parse(mainHtml) else null
+
+            // Extract title and description (full description lives on the main series page, not /seasons/)
+            val titleRu = doc.selectFirst("h1.title-ru")?.text()?.ifBlank { null }
+                ?: mainDoc?.selectFirst("h1.title-ru")?.text()
+                ?: ""
+            val titleEn = doc.selectFirst("h2.title-en")?.text()?.ifBlank { null }
+                ?: mainDoc?.selectFirst("h2.title-en")?.text()
+                ?: ""
+            val description = resolveSeriesDescription(mainDoc, doc)
+            Log.d(TAG, "Parsed: titleRu=$titleRu, titleEn=$titleEn, desc=${description.take(80)}")
             
             val rows = doc.select("tr")
             val seasonMap = mutableMapOf<String, MutableList<Episode>>()
@@ -288,10 +311,12 @@ class LostFilmRepository {
                 Log.d(TAG, "Created movie episode: ${movieEp.title} code=${movieEp.episodeCode} watched=${movieEp.isWatched}")
             }
             
-            // Parse poster from itemprop=image (e.g. /Static/Images/1097/Posters/poster.jpg)
-            var posterUrl = doc.selectFirst("img[itemprop=image]")?.attr("src")?.let { src ->
-                if (src.startsWith("http")) src else "https://${NetworkClient.getHost()}$src"
-            } ?: ""
+            // Parse poster from itemprop=image (present on main series page, e.g. /Static/Images/1097/Posters/poster.jpg)
+            var posterUrl = (mainDoc?.selectFirst("img[itemprop=image]") ?: doc.selectFirst("img[itemprop=image]"))
+                ?.attr("src")
+                ?.let { src ->
+                    if (src.startsWith("http")) src else "https://${NetworkClient.getHost()}$src"
+                } ?: ""
             // Fallback to constructed URL from seriesId
             if (posterUrl.isBlank() && seriesId.isNotBlank()) {
                 posterUrl = "https://${NetworkClient.getImageHost()}/Static/Images/$seriesId/Posters/poster.jpg"
@@ -317,6 +342,48 @@ class LostFilmRepository {
                 sessionToken = sessionToken
             )
         }
+    }
+
+    /**
+     * Extract full series/movie description from the main page's description block,
+     * preserving <br>/<p> paragraph breaks. Falls back to seasonsDoc / meta description only if absent.
+     */
+    internal fun resolveSeriesDescription(mainDoc: Document?, seasonsDoc: Document): String {
+        val fromMain = mainDoc?.let { extractDescription(it) }.orEmpty()
+        if (fromMain.isNotBlank()) return fromMain
+
+        val fromSeasons = extractDescription(seasonsDoc)
+        if (fromSeasons.isNotBlank()) return fromSeasons
+
+        return mainDoc?.selectFirst("meta[name=description]")?.attr("content")?.trim()?.ifBlank { null }
+            ?: seasonsDoc.selectFirst("meta[name=description]")?.attr("content")?.trim()
+            ?: ""
+    }
+
+    internal fun extractDescription(doc: Document): String {
+        val descEl = doc.selectFirst("div.text-block.description div[itemprop=description]")
+            ?: doc.selectFirst("div[itemprop=description]")
+            ?: doc.selectFirst("div.text-block.description > div.body > div.body")
+            ?: doc.selectFirst("div.text-block.description > div.body")
+            ?: return ""
+
+        val clone = descEl.clone()
+        val marker = "___LF_NL___"
+        for (br in clone.select("br")) {
+            br.replaceWith(TextNode(marker))
+        }
+        for (p in clone.select("p")) {
+            p.before(TextNode("$marker$marker"))
+            p.after(TextNode("$marker$marker"))
+        }
+
+        return clone.text()
+            .replace(marker, "\n")
+            .replace('\u00A0', ' ')
+            .lines()
+            .joinToString("\n") { it.trim() }
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
     }
 
     suspend fun getRecentEpisodes(client: OkHttpClient = NetworkClient.createProxiedClient()): List<Episode> = withContext(Dispatchers.IO) {

@@ -97,6 +97,15 @@ object CiadpiTuner {
             .apply()
     }
 
+    /** Import strategy from LAN transfer (saves TTL + index to prefs). */
+    fun saveStrategy(context: Context, dpiTtl: Int, strategyIndex: Int) {
+        getPrefs(context).edit()
+            .putInt(KEY_DPI_TTL, dpiTtl)
+            .putInt(KEY_STRATEGY_INDEX, strategyIndex)
+            .apply()
+        Log.i(TAG, "Imported strategy from LAN: TTL=$dpiTtl index=$strategyIndex")
+    }
+
     /**
      * Verify saved strategy by downloading a test image (340KB).
      * Must be called after ciadpi is started.

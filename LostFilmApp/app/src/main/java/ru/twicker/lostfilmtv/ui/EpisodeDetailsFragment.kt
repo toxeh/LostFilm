@@ -81,7 +81,7 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
         )
 
         val cookieJar = LostFilmAuth.cookieJar(requireContext())
-        client = NetworkClient.createCiadpiClient(cookieJar)
+        client = NetworkClient.createSmartClient(cookieJar)
 
         buildAdapter()
     }
@@ -148,7 +148,7 @@ class EpisodeDetailsFragment : DetailsSupportFragment(), OnItemViewClickedListen
         }
 
         // Init download queue
-        val imgClient = client ?: ru.twicker.lostfilmtv.network.NetworkClient.createCiadpiClient(
+        val imgClient = client ?: ru.twicker.lostfilmtv.network.NetworkClient.createSmartClient(
             ru.twicker.lostfilmtv.network.LostFilmAuth.cookieJar(requireContext())
         )
         ru.twicker.lostfilmtv.network.ImageDownloadQueue.init(requireContext(), imgClient)
